@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Ezequiel Ruiz
+
+#pragma once
+
+#include <string_view>
+
+// The paths that the application gives, in UTF-8, which the system takes in its own syntax.
+
+namespace openfits::detail {
+
+/// Throws usage_error unless path, a path that the application gives, is not empty (errc::invalid_argument) and is
+/// valid UTF-8 (errc::invalid_utf8). what names it in the messages, as in "the path".
+void check_path_argument(std::string_view path, std::string_view what);
+
+#if defined(_WIN32)
+/// True when path, absolute and normalized as Windows normalizes a path (GetFullPathNameW()), names a device: a path of
+/// the device namespace, \\.\ or \\?\, that does not go on with a file system, a drive and a separator (C:\), UNC\ or a
+/// volume (Volume{...}\). \\.\NUL, which a device name such as NUL becomes in any directory, \\.\COM1, \\.\pipe\name,
+/// \\.\C:, the volume itself, and \\?\GLOBALROOT\Device\Null are devices.
+[[nodiscard]] bool names_a_device(std::string_view path) noexcept;
+#endif
+
+} // namespace openfits::detail

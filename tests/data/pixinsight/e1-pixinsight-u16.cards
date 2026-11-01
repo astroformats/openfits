@@ -1,0 +1,18 @@
+0	SIMPLE	bool	T	file does conform to FITS standard
+0	BITPIX	int	16	number of bits per data pixel
+0	NAXIS	int	2	number of data axes
+0	NAXIS1	int	37	length of data axis 1
+0	NAXIS2	int	23	length of data axis 2
+0	EXTEND	bool	T	FITS dataset may contain extensions
+0	COMMENT	commentary	  FITS (Flexible Image Transport System) format is defined in 'Astronomy	
+0	COMMENT	commentary	  and Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H	
+0	BZERO	int	32768	offset data range to that of unsigned short
+0	BSCALE	int	1	default scaling factor
+0	PROGRAM	str	PixInsight 1.9.5	Software that created this HDU
+0	COMMENT	commentary	PixInsight Class Library: PCL 2.11.0	
+0	COMMENT	commentary	FITS module version 1.2.3	
+0	HDUNAME	str	openfits_sample_e1	Identifier of primary image HDU
+0	ROWORDER	str	TOP-DOWN	Order of pixel rows stored in the image array
+0	OBJECT	str	pattern	The pattern image of the samples
+0	EXPTIME	float	300.0	Exposure time in seconds
+0	HISTORY	commentary	Written by the OpenFITS sample script	

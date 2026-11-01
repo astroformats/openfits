@@ -1,0 +1,160 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Ezequiel Ruiz
+
+name: nightly
+
+# Long jobs and platforms that are too slow for every pull request. They run on a schedule once the
+# repository is public, where Actions minutes are free, and on manual dispatch at any time.
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CMAKE_COLOR_DIAGNOSTICS: "ON"
+  VCPKG_DISABLE_METRICS: "1"
+
+jobs:
+  coverage:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config zlib1g-dev libgtest-dev
+          pip install gcovr
+
+      - name: Build and test with coverage
+        run: |
+          cmake --preset linux-gcc-coverage -DCMAKE_CXX_COMPILER=g++-14
+          cmake --build --preset linux-gcc-coverage
+          ctest --preset linux-gcc-coverage
+
+      # The data files come from g++-14, so the gcov must be its own: the default one is older and rejects them.
+      - name: Report
+        run: |
+          mkdir -p out/coverage
+          gcovr --root . --gcov-executable gcov-14 --object-directory out/build/linux-gcc-coverage \
+            --exclude-directories 'out/build/[^/]+/CMakeFiles' --filter 'src/' --filter 'include/' \
+            --print-summary --html-details out/coverage/index.html
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: out/coverage
+          if-no-files-found: error
+
+  # An hour per fuzz target, from its committed seeds and the corpus that the targets grew on the nights before.
+  # Findings are uploaded; each one becomes a committed seed once it is fixed.
+  fuzz:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config zlib1g-dev
+
+      # The randomized address space of the 24.04 kernel is larger than Clang 18's sanitizers support.
+      - name: Lower the address-space randomization
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - name: Build
+        run: |
+          cmake --preset linux-clang-fuzz -DCMAKE_CXX_COMPILER=clang++-18 -DOPENFITS_FUZZ_SECONDS=3600
+          cmake --build --preset linux-clang-fuzz
+
+      # A cache entry cannot be replaced, so each run saves the corpus under a key of its own, and the next one restores
+      # the newest.
+      - name: Restore the corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            fuzz-corpus-
+
+      # Every target at once: each fuzzes for its own hour, so the step takes an hour on any number of processors.
+      - name: Fuzz
+        id: fuzz
+        run: ctest --preset linux-clang-fuzz --parallel 8
+
+      # After findings too: the corpus holds the inputs that added coverage, the findings are in the artifacts.
+      - name: Save the corpus
+        if: ${{ !cancelled() && (steps.fuzz.outcome == 'success' || steps.fuzz.outcome == 'failure') }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # ctest keeps the output of the tests that passed in its log, where each run states the edges it covered.
+      - name: Coverage
+        if: ${{ !cancelled() }}
+        run: sed -n 's/^-- \(fuzz_.* covered .*\)$/::notice::\1/p' out/build/linux-clang-fuzz/Testing/Temporary/LastTest.log
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: fuzz-artifacts
+          path: out/build/linux-clang-fuzz/fuzz/artifacts
+          if-no-files-found: ignore
+
+  # The code is endian-correct by design. Big-endian hosts are not supported, but they must keep working: FITS data are
+  # big-endian on disk, so a big-endian host is the one where the library swaps no bytes.
+  s390x:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: s390x
+
+      - name: Build and test under emulation
+        run: |
+          docker run --rm --platform linux/s390x --volume "$PWD:/src" --workdir /src ubuntu:24.04 bash -eu -c '
+            apt-get update
+            apt-get install -y --no-install-recommends ca-certificates cmake ninja-build g++ pkg-config \
+              zlib1g-dev libgtest-dev
+            cmake --preset linux-gcc-release -DOPENFITS_WARNINGS_AS_ERRORS=ON
+            cmake --build --preset linux-gcc-release
+            ctest --preset linux-gcc-release'
+
+  # The newest versions of the dependencies, to see breakage before the baseline moves.
+  latest-dependencies:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Move the vcpkg baseline to the newest commit
+        run: |
+          newest=$(git ls-remote https://github.com/microsoft/vcpkg.git refs/heads/master | cut -f1)
+          jq --arg commit "$newest" '."builtin-baseline" = $commit' vcpkg.json > vcpkg.json.new
+          mv vcpkg.json.new vcpkg.json
+          echo "baseline: $newest"
+
+      - uses: ./.github/actions/setup-vcpkg
+        with:
+          cache-key: latest-dependencies
+          triplet: x64-linux
+
+      - name: Build and test
+        run: |
+          cmake --preset linux-gcc-release -DCMAKE_CXX_COMPILER=g++-14 -DOPENFITS_WARNINGS_AS_ERRORS=ON \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-linux
+          cmake --build --preset linux-gcc-release
+          ctest --preset linux-gcc-release

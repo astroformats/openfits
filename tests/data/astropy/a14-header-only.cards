@@ -1,0 +1,17 @@
+0	SIMPLE	bool	T	conforms to FITS standard
+0	BITPIX	int	8	array data type
+0	NAXIS	int	0	number of array dimensions
+0	EXTEND	bool	T	
+0	TELESCOP	str	Invented 200	telescope
+0	INSTRUME	str	Camera X	instrument
+0	OBSERVER	str	Nobody	observer
+0	OBJECT	str	M 31	object
+0	DATE-OBS	str	2026-10-30T21:15:00.250	start of the exposure, UTC
+0	EXPTIME	float	300.0	[s] exposure time
+0	CCD-TEMP	float	-10.5	[degC] sensor temperature
+0	XBINNING	int	2	binning
+0	RA	float	10.684708	[deg] right ascension
+0	DEC	float	41.26875	[deg] declination
+0	IMAGETYP	str	Light Frame	type of the frame
+0	COMMENT	commentary	a header without data	
+0	HISTORY	commentary	written by astropy for the samples of OpenFITS	

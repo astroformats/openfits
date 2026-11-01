@@ -1,0 +1,10 @@
+0	SIMPLE	bool	T	conforms to FITS standard
+0	BITPIX	int	16	array data type
+0	NAXIS	int	2	number of array dimensions
+0	NAXIS1	int	37	
+0	NAXIS2	int	23	
+0	EXTEND	bool	T	
+0	BSCALE	float	0.01	
+0	BZERO	float	100.0	
+0	BLANK	int	-32768	
+0	OBJECT	str	pattern	A3 scaled, BLANK at pixels 0, 400 and 850

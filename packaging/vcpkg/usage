@@ -1,0 +1,8 @@
+openfits provides CMake targets:
+
+  find_package(openfits CONFIG REQUIRED)
+  target_link_libraries(main PRIVATE openfits::openfits)
+
+openfits provides a pkg-config module:
+
+  openfits

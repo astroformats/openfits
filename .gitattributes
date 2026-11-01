@@ -1,0 +1,10 @@
+* text=auto eol=lf
+
+# Test data must stay byte-exact.
+*.fits binary
+*.fit binary
+*.fts binary
+*.fz binary
+*.gz binary
+*.bin binary
+fuzz/seeds/** binary

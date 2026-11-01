@@ -1,0 +1,15 @@
+0	SIMPLE	bool	T	file does conform to FITS standard
+0	BITPIX	int	16	number of bits per data pixel
+0	NAXIS	int	2	number of data axes
+0	NAXIS1	int	37	length of data axis 1
+0	NAXIS2	int	23	length of data axis 2
+0	EXTEND	bool	T	FITS dataset may contain extensions
+0	COMMENT	commentary	  FITS (Flexible Image Transport System) format is defined in 'Astronomy	
+0	COMMENT	commentary	  and Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H	
+0	BZERO	float	32768.0	Offset data range to that of unsigned short
+0	BSCALE	float	1.0	Default scaling factor
+0	PROGRAM	str	Siril 1.4.4	Software that created this HDU
+0	DATE	str	2026-10-31T08:14:30	UTC date that FITS file was created
+0	BAYERPAT	str	RGGB	Bayer color pattern
+0	XBAYROFF	int	0	X offset of Bayer array
+0	YBAYROFF	int	0	Y offset of Bayer array
