@@ -1,0 +1,40 @@
+0	SIMPLE	bool	T	
+0	BITPIX	int	16	
+0	NAXIS	int	2	
+0	NAXIS1	int	37	
+0	NAXIS2	int	23	
+0	BZERO	int	32768	
+0	BSCALE	int	1	
+0	EXTEND	bool	T	
+0	OBJECT	str	NGC 7000	
+0	TELESCOP	str	Invented 80 ED	
+0	INSTRUME	str	Invented CCD	
+0	OBSERVER	str	Nobody	
+0	DATE-OBS	str	2026-08-14T22:10:05	
+0	EXPTIME	float	600.0	Exposure time in seconds
+0	EXPOSURE	float	600.0	Exposure time in seconds
+0	SET-TEMP	float	-15.0	CCD temperature setpoint in C
+0	CCD-TEMP	float	-14.95	CCD temperature at start of exposure in C
+0	XPIXSZ	float	9.0	Pixel Width in microns (after binning)
+0	YPIXSZ	float	9.0	Pixel Height in microns (after binning)
+0	XBINNING	int	1	Binning factor in width
+0	YBINNING	int	1	Binning factor in height
+0	XORGSUBF	int	0	Subframe X position in binned pixels
+0	YORGSUBF	int	0	Subframe Y position in binned pixels
+0	READOUTM	str	Normal	Readout mode of image
+0	FILTER	str	Ha	Filter used when taking image
+0	IMAGETYP	str	Light Frame	Type of image
+0	FOCALLEN	float	560.0	Focal length of telescope in mm
+0	APTDIA	float	80.0	Aperture diameter of telescope in mm
+0	APTAREA	float	5026.548245743669	Aperture area of telescope in mm^2
+0	EGAIN	float	1.399999976158142	Electronic gain in e-/ADU
+0	SBSTDVER	str	SBFITSEXT Version 1.0	SBIG FITS extensions ver
+0	SWCREATE	str	Invented Capture 6.0	Name of software that created the image
+0	SITELAT	str	-34 36 00	Latitude of the imaging location
+0	SITELONG	str	-58 22 00	Longitude of the imaging location
+0	JD	float	2461267.4236689815	Julian Date at start of exposure
+0	OBJCTRA	str	20 59 17	Nominal object right ascension
+0	OBJCTDEC	str	+44 31 44	Nominal object declination
+0	AIRMASS	float	1.8213460000000001	Relative optical path length through atmosphere
+0	PEDESTAL	int	-100	Correction to add for zero-based ADU
+0	SWOWNER	str	Nobody	Licensed owner of software

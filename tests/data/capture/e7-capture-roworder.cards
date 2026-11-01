@@ -1,0 +1,47 @@
+0	SIMPLE	bool	T	
+0	BITPIX	int	16	
+0	NAXIS	int	2	
+0	NAXIS1	int	37	
+0	NAXIS2	int	23	
+0	BZERO	int	32768	
+0	BSCALE	int	1	
+0	EXTEND	bool	T	
+0	IMAGETYP	str	LIGHT	Type of exposure
+0	EXPOSURE	float	120.0	[s] Exposure duration
+0	EXPTIME	float	120.0	[s] Exposure duration
+0	DATE-LOC	str	2026-08-14T19:12:44.123	Time of observation (local)
+0	DATE-OBS	str	2026-08-14T22:12:44.123	Time of observation (UTC)
+0	XBINNING	int	1	X axis binning factor
+0	YBINNING	int	1	Y axis binning factor
+0	GAIN	int	100	Sensor gain
+0	OFFSET	int	30	Sensor gain offset
+0	EGAIN	float	0.25	[e-/ADU] Electrons per A/D unit
+0	XPIXSZ	float	3.76	[um] Pixel X axis size
+0	YPIXSZ	float	3.76	[um] Pixel Y axis size
+0	INSTRUME	str	Invented Colour 2600	Imaging instrument name
+0	SET-TEMP	float	-10.0	[degC] CCD temperature setpoint
+0	CCD-TEMP	float	-10.1	[degC] CCD temperature
+0	READOUTM	str	Normal	Sensor readout mode
+0	BAYERPAT	str	RGGB	Sensor Bayer pattern
+0	XBAYROFF	int	0	Bayer pattern X axis offset
+0	YBAYROFF	int	1	Bayer pattern Y axis offset
+0	USBLIMIT	int	40	Camera-specific USB setting
+0	TELESCOP	str	Invented 72 APO	Name of telescope
+0	FOCALLEN	float	432.0	[mm] Focal length
+0	FOCRATIO	float	6.0	Focal ratio
+0	RA	float	314.8208333	[deg] RA of telescope
+0	DEC	float	44.5288889	[deg] Declination of telescope
+0	CENTALT	float	38.12	[deg] Altitude of telescope
+0	CENTAZ	float	31.4	[deg] Azimuth of telescope
+0	SITEELEV	float	25.0	[m] Observation site elevation
+0	SITELAT	float	-34.6	[deg] Observation site latitude
+0	SITELONG	float	-58.36666	[deg] Observation site longitude
+0	OBJECT	str	NGC 7000	Name of the object of interest
+0	OBJCTRA	str	20 59 17	[H M S] RA of imaged object
+0	OBJCTDEC	str	+44 31 44	[D M S] Declination of imaged object
+0	FILTER	str	L-eXtreme	Active filter name
+0	FOCPOS	int	12345	[step] Focuser position
+0	FOCTEMP	float	14.25	[degC] Focuser temperature
+0	ROWORDER	str	TOP-DOWN	FITS Image Orientation
+0	EQUINOX	float	2000.0	Equinox of celestial coordinate system
+0	SWCREATE	str	Invented Imaging 3.1	Software that created this file

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Ezequiel Ruiz
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Only a static library needs its private dependencies at link time.
+if(NOT @OPENFITS_SHARED@)
+    # CMake's module, which defines ZLIB::ZLIB, also for a consumer that prefers CMake packages: that of zlib 1.3.2
+    # names the target of a static library ZLIB::ZLIBSTATIC.
+    find_dependency(ZLIB MODULE)
+    if(@OPENFITS_WITH_TBB@)
+        find_dependency(TBB CONFIG)
+    endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/openfits-targets.cmake")
+
+check_required_components(openfits)

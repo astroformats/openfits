@@ -1,0 +1,94 @@
+0	SIMPLE	bool	T	conforms to FITS standard
+0	BITPIX	int	16	array data type
+0	NAXIS	int	2	number of array dimensions
+0	NAXIS1	int	37	
+0	NAXIS2	int	23	
+0	EXTEND	bool	T	
+0	BSCALE	int	1	
+0	BZERO	int	32768	
+0	LOGICAL	bool	T	a logical
+0	FALSE	bool	F	
+0	INTMAX	int	9223372036854775807	the largest signed 64-bit integer
+0	INTMIN	int	-9223372036854775808	the smallest one
+0	UINTMAX	int	18446744073709551615	the largest unsigned 64-bit integer
+0	REALE	float	1.2345e-10	an E exponent
+0	REALD	float	6.0221e+23	a D exponent
+0	REALFIX	float	0.125	
+0	CINT	complex	12.0,-7.0	a complex integer
+0	CREAL	complex	1.5,-2500.0	a complex real
+0	UNDEF	undefined		an undefined value
+0	QUOTES	str	O'Hara's	quotes and trailing spaces
+0	LEADING	str	   leading	leading spaces are significant
+0	NULLSTR	str		the null string
+0	EMPTY	str		the empty string
+0	EXPTIME	float	300.0	[s] exposure time
+0	DATE	str	2026-10-31T10:00:00	the date of the file
+0	DATE-OBS	str	2026-10-30T21:15:00.250	the start of the exposure
+0	WCSAXES	int	2	
+0	CTYPE1	str	RA---TAN	
+0	CTYPE2	str	DEC--TAN	
+0	CRPIX1	float	19.0	
+0	CRPIX2	float	12.0	
+0	CRVAL1	float	10.684708	
+0	CRVAL2	float	41.26875	
+0	CDELT1	float	-0.0002778	[deg]
+0	CDELT2	float	0.0002778	[deg]
+0	CUNIT1	str	deg	
+0	CUNIT2	str	deg	
+0	WCSNAMEA	str	pixels	an alternate description
+0	CTYPE1A	str	X	
+0	CTYPE2A	str	Y	
+0	CRPIX1A	float	1.0	
+0	CRPIX2A	float	1.0	
+0	CRVAL1A	float	0.0	
+0	CRVAL2A	float	0.0	
+0	INHERIT	bool	F	a keyword of extensions, here as any
+0	LONGSTRN	str	OGIP 1.0	CONTINUE records may follow
+0	COMMENT	commentary	  a comment	
+0	HISTORY	commentary	  a step	
+0		commentary	  text of the blank keyword	
+0	LONGSTR	str	This string is longer than a record holds, and continues over CONTINUE records, which the standard defines since FITS 4.0.	Its comment is continued as well, on records of the null string.
+0	ESO DET DIT	float	1.5	[s] a spaced name
+0	ESO DET NDIT	int	10	without the space before the indicator
+0	ESO INS FILT1 NAME	str	Ha	a string
+0	A LONGER HIERARCHICAL NAME OF THE CONVENTION	bool	T	
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		
+0		commentary		

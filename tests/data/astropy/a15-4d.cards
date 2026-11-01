@@ -1,0 +1,9 @@
+0	SIMPLE	bool	T	conforms to FITS standard
+0	BITPIX	int	16	array data type
+0	NAXIS	int	4	number of array dimensions
+0	NAXIS1	int	5	
+0	NAXIS2	int	4	
+0	NAXIS3	int	3	
+0	NAXIS4	int	2	
+0	EXTEND	bool	T	
+0	OBJECT	str	pattern	a 5 x 4 x 3 x 2 cube, each value its index

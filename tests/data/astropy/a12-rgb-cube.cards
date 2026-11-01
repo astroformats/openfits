@@ -1,0 +1,11 @@
+0	SIMPLE	bool	T	conforms to FITS standard
+0	BITPIX	int	16	array data type
+0	NAXIS	int	3	number of array dimensions
+0	NAXIS1	int	37	
+0	NAXIS2	int	23	
+0	NAXIS3	int	3	
+0	EXTEND	bool	T	
+0	BSCALE	int	1	
+0	BZERO	int	32768	
+0	CTYPE3	str	RGB	the channels of a colour image
+0	OBJECT	str	pattern	the three channels as unsigned 16-bit integers
