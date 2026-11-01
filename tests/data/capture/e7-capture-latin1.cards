@@ -1,0 +1,14 @@
+0	SIMPLE	bool	T	
+0	BITPIX	int	16	
+0	NAXIS	int	2	
+0	NAXIS1	int	37	
+0	NAXIS2	int	23	
+0	BZERO	int	32768	
+0	BSCALE	int	1	
+0	INSTRUME	str	Invented Cam	camera
+0	EXPTIME	float	30.0	exposure in seconds
+0	CCD-TEMP	float	-5.3	sensor temperature in ?C
+0	SITELAT	float	-34.6	latitude in ?
+0	OBSERVER	str	Mar?a	observer
+0	ROWORDER	str	BOTTOM-UP	order of the rows
+0	SWCREATE	str	Invented Live 4	software

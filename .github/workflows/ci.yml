@@ -1,0 +1,676 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Ezequiel Ruiz
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: Platforms to run besides Linux, which always runs
+        type: choice
+        options: [all, windows, macos, linux]
+        default: all
+
+permissions:
+  contents: read
+
+# A newer commit of a pull request, or a newer push to main, cancels the run that it supersedes: two merges in a row
+# test main once.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+
+env:
+  CMAKE_COLOR_DIAGNOSTICS: "ON"
+  VCPKG_DISABLE_METRICS: "1"
+
+jobs:
+  # Decides how much of the platform matrix runs. Windows and macOS minutes are expensive on private
+  # repositories (a macOS minute counts ten times), so there they run only when asked for, on a manual
+  # run, where the platforms input picks what to run. Public repositories run everything on every pull
+  # request and push. Linux always runs.
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      windows: ${{ steps.plan.outputs.windows }}
+      macos: ${{ steps.plan.outputs.macos }}
+      vcpkg_port: ${{ steps.plan.outputs.vcpkg_port }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          PRIVATE: ${{ github.event.repository.private }}
+          PLATFORMS: ${{ github.event.inputs.platforms }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ]; then
+            selection="${PLATFORMS:-all}"
+          elif [ "$PRIVATE" = false ]; then
+            selection=all
+          else
+            selection=linux
+          fi
+
+          windows=false
+          macos=false
+          case "$selection" in
+            all) windows=true; macos=true ;;
+            windows) windows=true ;;
+            macos) macos=true ;;
+          esac
+          echo "platforms: $selection"
+
+          # The dependencies of the port, installed by name so that the binary cache can hold them. Linux also
+          # builds the optional feature.
+          base="zlib"
+          rows='{"name":"x64-linux","runner":"ubuntu-24.04","triplet":"x64-linux","features":"[tbb]","packages":"'"$base"' tbb"}'
+          if [ "$windows" = true ]; then
+            rows="$rows"',{"name":"x64-windows","runner":"windows-2025-vs2026","triplet":"x64-windows","features":"","packages":"'"$base"'"}'
+          fi
+          if [ "$macos" = true ]; then
+            rows="$rows"',{"name":"arm64-osx","runner":"macos-15","triplet":"arm64-osx","features":"","packages":"'"$base"'"}'
+          fi
+
+          {
+            echo "windows=$windows"
+            echo "macos=$macos"
+            echo "vcpkg_port=[$rows]"
+          } >> "$GITHUB_OUTPUT"
+
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Files that .gitattributes marks binary, such as test data, keep the line ends that they hold.
+      - name: Line endings
+        run: |
+          if git ls-files --eol | grep -E '^i/(crlf|mixed)' | grep -v 'attr/-text'; then
+            echo "::error::Text files must use LF line endings"
+            exit 1
+          fi
+
+      - name: SPDX headers
+        run: |
+          missing=$(git ls-files -z '*.h' '*.cpp' '*.cmake' '*.in' '*.yml' '*.sh' '*.py' '*.js' '*CMakeLists.txt' |
+            xargs -0 grep -L 'SPDX-License-Identifier: Apache-2.0' || true)
+          if [ -n "$missing" ]; then
+            echo "::error::Missing SPDX header in: $missing"
+            exit 1
+          fi
+
+      - name: Version
+        run: |
+          project=$(sed -n 's/^    VERSION \([0-9][0-9.]*\)$/\1/p' CMakeLists.txt)
+          port=$(jq -r .version packaging/vcpkg/vcpkg.json)
+          status=$(sed -n 's/^\*\*Status: \([0-9][0-9.]*\)\.\*\*.*$/\1/p' README.md)
+          echo "CMakeLists.txt: $project, vcpkg port: $port, README status: $status"
+          test -n "$project" && test "$project" = "$port" && test "$project" = "$status"
+
+      # cl reads a header without a byte order mark in the code page of the system, unless the application compiles
+      # with /utf-8, and warns (C4819) about a character that the code page lacks, as 932 and 950 lack the signs of
+      # multiplication and of plus or minus: the installed headers keep to ASCII and the section sign, which they have.
+      - name: Installed headers in ASCII
+        run: |
+          git ls-files -z include 'cmake/*.h.in' | python3 -c '
+          import sys
+          found = False
+          for name in filter(None, sys.stdin.read().split("\0")):
+              with open(name, encoding="utf-8") as header:
+                  for number, line in enumerate(header, 1):
+                      if any(ord(c) > 127 and c != "§" for c in line):
+                          print(f"::error file={name},line={number}::A character other than ASCII and the section sign")
+                          found = True
+          sys.exit(found)
+          '
+
+      - name: Formatting
+        run: |
+          pip install clang-format==22.1.3
+          git ls-files '*.h' '*.cpp' | xargs clang-format --dry-run --Werror
+
+  linux:
+    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.name }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gcc-14 x64 debug
+            runner: ubuntu-24.04
+            preset: linux-gcc-debug
+            cxx: g++-14
+          # Also builds the benchmarks and runs each once, so that they keep working.
+          - name: gcc-14 x64 release
+            runner: ubuntu-24.04
+            preset: linux-gcc-release
+            cxx: g++-14
+            args: -DOPENFITS_BUILD_BENCHMARKS=ON
+            packages: libbenchmark-dev
+          - name: gcc-14 x64 release shared
+            runner: ubuntu-24.04
+            preset: linux-gcc-release
+            cxx: g++-14
+            args: -DBUILD_SHARED_LIBS=ON
+          - name: gcc-14 x64 release with oneTBB
+            runner: ubuntu-24.04
+            preset: linux-gcc-release
+            cxx: g++-14
+            args: -DOPENFITS_WITH_TBB=ON
+            packages: libtbb-dev
+          - name: gcc arm64 release
+            runner: ubuntu-24.04-arm
+            preset: linux-gcc-release
+            cxx: g++
+          - name: clang-18 libstdc++ x64 release
+            runner: ubuntu-24.04
+            preset: linux-clang-release
+            cxx: clang++-18
+          - name: clang-18 libc++ x64 release
+            runner: ubuntu-24.04
+            preset: linux-clang-libcxx-release
+            cxx: clang++-18
+            vcpkg: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the dependencies
+        if: ${{ !matrix.vcpkg }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config zlib1g-dev libgtest-dev ${{ matrix.packages }}
+
+      # vcpkg builds the dependencies with the compiler of CC and CXX, against libc++.
+      - name: Install libc++
+        if: ${{ matrix.vcpkg }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libc++-dev libc++abi-dev
+          echo "CC=clang-18" >> "$GITHUB_ENV"
+          echo "CXX=clang++-18" >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/setup-vcpkg
+        if: ${{ matrix.vcpkg }}
+        with:
+          cache-key: linux-libcxx
+          triplet: x64-linux-libcxx
+          overlay-triplets: cmake/vcpkg
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DOPENFITS_WARNINGS_AS_ERRORS=ON -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} ${{ matrix.args }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  # The oldest compilers supported, GCC 11 and Clang 15 (with libstdc++ 11), with the dependencies of Ubuntu 22.04. It
+  # runs in a container of that release, which outlives its runner image, and takes CMake from PyPI, since the CMake of
+  # Ubuntu 22.04 is older than the minimum.
+  oldest-compilers:
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    name: ${{ matrix.name }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gcc-11 x64 release
+            preset: linux-gcc-release
+            cxx: g++-11
+          - name: clang-15 x64 release
+            preset: linux-clang-release
+            cxx: clang++-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the compilers and the dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends g++-11 clang-15 ninja-build python3-pip \
+            pkg-config zlib1g-dev libgtest-dev
+          pip3 install cmake
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DOPENFITS_WARNINGS_AS_ERRORS=ON -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  # The sanitizer presets run every test but the chain of the installed package (label package).
+  sanitizers:
+    runs-on: ubuntu-24.04
+    name: ${{ matrix.name }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gcc-14 ASan and UBSan
+            preset: linux-gcc-asan
+            cxx: g++-14
+          - name: clang-18 ASan and UBSan
+            preset: linux-clang-asan
+            cxx: clang++-18
+          - name: clang-18 TSan
+            preset: linux-clang-tsan
+            cxx: clang++-18
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config zlib1g-dev libgtest-dev
+
+      # The randomized address space of the 24.04 kernel is larger than Clang 18's sanitizers support.
+      - name: Lower the address-space randomization
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DOPENFITS_WARNINGS_AS_ERRORS=ON -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  # Each fuzz target for a minute, and every target built as OSS-Fuzz builds it (fuzz.yml).
+  fuzz:
+    uses: ./.github/workflows/fuzz.yml
+    with:
+      fuzz-seconds: 60
+
+  tidy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config zlib1g-dev libgtest-dev libtbb-dev libbenchmark-dev
+          pip install clang-tidy==22.1.8
+
+      # The configure step generates version.h and the compilation database. Nothing needs building. With oneTBB and
+      # the benchmarks, the code that uses them is analyzed too.
+      - name: Configure
+        run: |
+          cmake --preset linux-clang-release -DCMAKE_CXX_COMPILER=clang++-18 -DOPENFITS_WITH_TBB=ON \
+            -DOPENFITS_BUILD_BENCHMARKS=ON
+
+      # tests/package/main.cpp is built by its own project, which defines EXPECTED_VERSION as the version of the
+      # OpenFITS it finds; here it is that of CMakeLists.txt. The Windows platform layer (*_win32.cpp) does not compile
+      # on Linux.
+      - name: clang-tidy
+        run: |
+          version=$(sed -n 's/^    VERSION \([0-9][0-9.]*\)$/\1/p' CMakeLists.txt)
+          test -n "$version"
+          git ls-files '*.cpp' ':!:*_win32.cpp' | xargs -P "$(nproc)" -n 1 \
+            clang-tidy -p out/build/linux-clang-release --quiet --extra-arg="-DEXPECTED_VERSION=\"$version\""
+
+  # OpenFITS in the build of another project (tests/package): from its sources through FetchContent, which gives that
+  # project the library alone, and installed, through its pkg-config file.
+  consumers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config zlib1g-dev
+
+      - name: Build from the sources
+        run: |
+          cmake -S tests/package -B "$RUNNER_TEMP/sources" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=g++-14 -DOPENFITS_CONSUMED_AS=sources -DOPENFITS_SOURCE_DIR="$GITHUB_WORKSPACE" \
+            -DOPENFITS_WARNINGS_AS_ERRORS=ON
+          cmake --build "$RUNNER_TEMP/sources"
+          "$RUNNER_TEMP/sources/consumer"
+
+      - name: Install the library
+        run: |
+          cmake --preset linux-gcc-release -DCMAKE_CXX_COMPILER=g++-14 -DOPENFITS_WARNINGS_AS_ERRORS=ON \
+            -DOPENFITS_BUILD_TESTS=OFF -DOPENFITS_BUILD_SAMPLES=OFF -DOPENFITS_BUILD_FUZZERS=OFF
+          cmake --build --preset linux-gcc-release
+          cmake --install out/build/linux-gcc-release --prefix "$RUNNER_TEMP/prefix"
+
+      - name: Build through pkg-config
+        run: |
+          export PKG_CONFIG_PATH="$RUNNER_TEMP/prefix/lib/pkgconfig"
+          pkg-config --validate openfits
+          echo "::notice::pkg-config: $(pkg-config --static --cflags --libs openfits)"
+          cmake -S tests/package -B "$RUNNER_TEMP/pkg-config" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=g++-14 -DOPENFITS_CONSUMED_AS=pkg-config
+          cmake --build "$RUNNER_TEMP/pkg-config"
+          "$RUNNER_TEMP/pkg-config/consumer"
+
+  # The files that the tests write, read by others than the library: fitsverify of CFITSIO and astropy, installed here
+  # and never linked. Both checks only report.
+  writer-output:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config zlib1g-dev libgtest-dev fitsverify
+          pip install astropy==8.0.1
+
+      - name: Configure
+        run: cmake --preset linux-gcc-release -DCMAKE_CXX_COMPILER=g++-14
+
+      - name: Build
+        run: cmake --build --preset linux-gcc-release --target openfits_tests
+
+      - name: Write the files of the tests
+        run: |
+          files="$RUNNER_TEMP/files"
+          mkdir -p "$files"
+          OPENFITS_WRITTEN_FILES_DIR="$files" out/build/linux-gcc-release/bin/openfits_tests --gtest_brief=1
+          echo "::notice::$(find "$files" -name '*.fits' | wc -l) files written"
+
+      - name: Verify the files with fitsverify
+        continue-on-error: true
+        run: |
+          failed=0
+          total=0
+          for file in "$RUNNER_TEMP"/files/*.fits; do
+            total=$((total + 1))
+            if ! fitsverify -q -H "$file" > "$RUNNER_TEMP/fitsverify.log" 2>&1; then
+              failed=$((failed + 1))
+              echo "::warning::$(head -c 300 "$RUNNER_TEMP/fitsverify.log")"
+            fi
+          done
+          echo "::notice::fitsverify passed $((total - failed)) of $total files"
+          test "$failed" -eq 0
+
+      # Every unit verified and its data read, the warnings of astropy taken for failures.
+      - name: Read the files with astropy
+        continue-on-error: true
+        run: |
+          python3 - "$RUNNER_TEMP/files" <<'EOF'
+          import sys
+          import warnings
+          from pathlib import Path
+
+          from astropy.io import fits
+
+          failed = 0
+          paths = sorted(Path(sys.argv[1]).glob('*.fits'))
+          for path in paths:
+              try:
+                  with warnings.catch_warnings():
+                      warnings.simplefilter('error')
+                      with fits.open(path, memmap=False) as units:
+                          units.verify('exception')
+                          for unit in units:
+                              _ = unit.data
+              except Exception as failure:
+                  failed += 1
+                  print(f'::warning::astropy cannot read {path.name}: {str(failure)[:300]}')
+          print(f'::notice::astropy read {len(paths) - failed} of {len(paths)} files')
+          sys.exit(1 if failed else 0)
+          EOF
+
+  windows:
+    needs: plan
+    if: ${{ needs.plan.outputs.windows == 'true' }}
+    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.name }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: msvc x64 debug
+            runner: windows-2025-vs2026
+            arch: x64
+            triplet: x64-windows
+            preset: msvc-debug
+          - name: msvc x64 release
+            runner: windows-2025-vs2026
+            arch: x64
+            triplet: x64-windows
+            preset: msvc-release
+          - name: msvc x64 release shared
+            runner: windows-2025-vs2026
+            arch: x64
+            triplet: x64-windows
+            preset: msvc-release
+            args: -DBUILD_SHARED_LIBS=ON
+          - name: msvc x64 AddressSanitizer
+            runner: windows-2025-vs2026
+            arch: x64
+            triplet: x64-windows
+            preset: msvc-asan
+          - name: clang-cl x64 release
+            runner: windows-2025-vs2026
+            arch: x64
+            triplet: x64-windows
+            preset: clang-cl-release
+          # The oldest compiler supported: the MSVC of Visual Studio 2022. Its binary cache is its own, since vcpkg
+          # builds the dependencies again for another compiler.
+          - name: msvc x64 release (Visual Studio 2022)
+            runner: windows-2022
+            arch: x64
+            triplet: x64-windows
+            preset: msvc-release
+            cache: -vs2022
+          - name: msvc arm64 release
+            runner: windows-11-arm
+            arch: arm64
+            triplet: arm64-windows
+            preset: msvc-release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Before vcpkg: it builds the dependencies with the toolchain it finds, which has to be the one of the build.
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: ${{ matrix.arch }}
+
+      - uses: ./.github/actions/setup-vcpkg
+        with:
+          cache-key: windows-${{ matrix.triplet }}${{ matrix.cache }}
+          triplet: ${{ matrix.triplet }}
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} -DOPENFITS_WARNINGS_AS_ERRORS=ON ${{ matrix.args }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  msys2:
+    needs: plan
+    if: ${{ needs.plan.outputs.windows == 'true' }}
+    runs-on: windows-2025
+    name: ${{ matrix.name }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: msys2 {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: msys2 ucrt64 gcc release
+            msystem: UCRT64
+            prefix: mingw-w64-ucrt-x86_64
+            compiler: gcc
+            preset: msys2-ucrt64-gcc-release
+          - name: msys2 ucrt64 gcc release shared
+            msystem: UCRT64
+            prefix: mingw-w64-ucrt-x86_64
+            compiler: gcc
+            preset: msys2-ucrt64-gcc-release
+            args: -DBUILD_SHARED_LIBS=ON
+          - name: msys2 clang64 release
+            msystem: CLANG64
+            prefix: mingw-w64-clang-x86_64
+            compiler: clang
+            preset: msys2-clang64-release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: ${{ matrix.msystem }}
+          path-type: minimal
+          install: >-
+            ${{ matrix.prefix }}-${{ matrix.compiler }}
+            ${{ matrix.prefix }}-cmake
+            ${{ matrix.prefix }}-ninja
+            ${{ matrix.prefix }}-pkgconf
+            ${{ matrix.prefix }}-zlib
+            ${{ matrix.prefix }}-gtest
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DOPENFITS_WARNINGS_AS_ERRORS=ON ${{ matrix.args }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  macos:
+    needs: plan
+    if: ${{ needs.plan.outputs.macos == 'true' }}
+    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.name }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: appleclang arm64 release
+            runner: macos-15
+            preset: macos-release
+            args: -DCMAKE_PREFIX_PATH=/opt/homebrew
+          - name: appleclang arm64 release shared
+            runner: macos-15
+            preset: macos-release
+            args: -DCMAKE_PREFIX_PATH=/opt/homebrew -DBUILD_SHARED_LIBS=ON
+          - name: appleclang x64 release
+            runner: macos-15-intel
+            preset: macos-release
+            vcpkg: true
+            args: -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-osx
+          # The oldest compiler supported: the AppleClang of the first Xcode 16 of the image.
+          - name: appleclang arm64 release (Xcode 16)
+            runner: macos-15
+            preset: macos-release
+            xcode: "16"
+            args: -DCMAKE_PREFIX_PATH=/opt/homebrew
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select the oldest Xcode ${{ matrix.xcode }}
+        if: ${{ matrix.xcode }}
+        run: |
+          app=$(find /Applications -maxdepth 1 -name 'Xcode_${{ matrix.xcode }}.*.app' | sort | head -n 1)
+          test -n "$app"
+          echo "DEVELOPER_DIR=$app/Contents/Developer" >> "$GITHUB_ENV"
+          "$app/Contents/Developer/usr/bin/xcodebuild" -version
+
+      # zlib comes with the SDK of macOS.
+      - name: Install the dependencies
+        if: ${{ !matrix.vcpkg }}
+        run: brew install pkgconf googletest
+
+      - uses: ./.github/actions/setup-vcpkg
+        if: ${{ matrix.vcpkg }}
+        with:
+          cache-key: macos-x64-osx
+          triplet: x64-osx
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DOPENFITS_WARNINGS_AS_ERRORS=ON ${{ matrix.args }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  # The library built as a vcpkg port, then consumed through find_package. The port builds this checkout,
+  # which the binary cache cannot see, so the cache is used for the dependencies only.
+  vcpkg-port:
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    name: vcpkg port ${{ matrix.name }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.vcpkg_port) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Before vcpkg: the developer environment sets VCPKG_ROOT to the copy that ships with Visual Studio,
+      # and the one set up below has to win.
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        if: ${{ runner.os == 'Windows' }}
+
+      # The dependencies come from the binary cache. The port itself is built from this checkout, which the
+      # cache cannot see, so it is installed with binary caching off. Both run in a directory without a
+      # vcpkg.json: next to one, vcpkg works in manifest mode and refuses package names.
+      - uses: ./.github/actions/setup-vcpkg
+        with:
+          cache-key: port-${{ matrix.triplet }}
+          triplet: ${{ matrix.triplet }}
+          packages: ${{ matrix.packages }}
+
+      - name: Install the port
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$VCPKG_ROOT/vcpkg" install "openfits${{ matrix.features }}" --binarysource=clear \
+            --overlay-ports="$GITHUB_WORKSPACE/packaging/vcpkg" --triplet ${{ matrix.triplet }}
+
+      - name: Build and run the consumer
+        run: |
+          cmake -S tests/package -B build-package -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+          cmake --build build-package
+          ./build-package/consumer
+
+  # A single check that stands for the whole workflow, and that a skipped platform does not break.
+  required:
+    if: ${{ always() }}
+    needs: [plan, lint, linux, oldest-compilers, sanitizers, fuzz, tidy, consumers, windows, msys2, macos, vcpkg-port]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped on purpose
+        run: |
+          test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = false

@@ -1,0 +1,7 @@
+0	SIMPLE	bool	T	conforms to FITS standard
+0	BITPIX	int	-32	array data type
+0	NAXIS	int	2	number of array dimensions
+0	NAXIS1	int	37	
+0	NAXIS2	int	23	
+0	EXTEND	bool	T	
+0	OBJECT	str	pattern	the pattern as 32-bit floating point

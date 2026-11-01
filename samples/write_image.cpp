@@ -1,0 +1,122 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Ezequiel Ruiz
+
+// Writing an image with keywords. This program makes a frame of unsigned 16-bit values, a sky with a few stars, and
+// writes it as the primary HDU of a FITS file with keywords of its own: the target, the exposure with its unit, the
+// time of the observation and a HISTORY record. The library writes the structural keywords itself, BZERO = 32768 among
+// them, which stores unsigned 16-bit values (standard §5.2.5). A second unit holds the same frame converted to
+// floating point and scaled back into 16-bit integers, as programs that keep physical values do. The file is replaced
+// only once it is complete. The program then reads the file back and prints what it holds.
+//
+// Usage: write_image <path>
+
+#include <openfits/openfits.h>
+
+#include "arguments.h"
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <exception>
+#include <iostream>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace {
+
+constexpr std::size_t width = 64;
+constexpr std::size_t height = 48;
+
+// A background of about 1000 with a gradient, and three stars.
+std::vector<std::uint16_t> frame()
+{
+    std::vector<std::uint16_t> values(width * height);
+    // The position and the peak of each star.
+    constexpr std::array<std::array<double, 3>, 3> stars{
+        {{12.0, 10.0, 30000.0}, {40.5, 25.0, 52000.0}, {55.0, 40.0, 12000.0}}};
+    for (std::size_t y = 0; y < height; ++y) {
+        for (std::size_t x = 0; x < width; ++x) {
+            double value = 1000.0 + (2.0 * static_cast<double>(x)) + static_cast<double>(y);
+            for (const auto& star : stars) {
+                const double dx = static_cast<double>(x) - star[0];
+                const double dy = static_cast<double>(y) - star[1];
+                value += star[2] * std::exp(-((dx * dx) + (dy * dy)) / 4.0);
+            }
+            values[(y * width) + x] = static_cast<std::uint16_t>(std::lround(std::min(value, 65535.0)));
+        }
+    }
+    return values;
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    try {
+        const std::vector<std::string> arguments = sample::arguments(argc, argv);
+        if (arguments.size() != 1) {
+            std::cerr << "usage: write_image <path>\n";
+            return 2;
+        }
+        const std::string& path = arguments[0];
+
+        // The header of the image: the keywords of the application. A unit in brackets at the start of a comment is
+        // the unit of the value (standard §4.3.2).
+        const std::vector<std::uint16_t> values = frame();
+        openfits::image_info image;
+        image.geometry.axes = {width, height};
+        image.header.set("OBJECT", "NGC 7000", "the target");
+        image.header.set("EXPTIME", 300.0, "[s] exposure time");
+        // The library reads no clock: the time is the application's, here a fixed one.
+        const auto observed = std::chrono::sys_days{std::chrono::year{2026} / 10 / 31} + std::chrono::hours{21};
+        image.header.set("DATE-OBS", openfits::format_date(observed), "start of the exposure, UTC");
+        image.header.add_history("written by the write_image sample of OpenFITS");
+
+        // The writer borrows the values until it saves them; it never modifies them.
+        openfits::writer output;
+        (void)output.add_image(image, std::span<const std::uint16_t>(values));
+
+        // The same frame in floating point, stored as 16-bit integers with a scaling of the application: each stored
+        // value is (value - BZERO) / BSCALE rounded, and NaN is stored as BLANK.
+        std::vector<float> physical(values.size());
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            physical[i] = static_cast<float>(values[i]) * 0.01F;
+        }
+        physical[0] = std::nanf("");
+        openfits::image_info scaled;
+        scaled.geometry.axes = {width, height};
+        scaled.bitpix = openfits::bitpix::int16;
+        scaled.scaling = {.scale = 0.01, .zero = 327.68};
+        scaled.blank = -32768;
+        scaled.header.set("EXTNAME", "PHYSICAL");
+        scaled.header.set("BUNIT", "adu/100");
+        (void)output.add_image(scaled, std::span<const float>(physical));
+        output.save(path);
+
+        // Read back: the keywords, and some values of each unit.
+        const openfits::reader file(path);
+        for (const openfits::hdu_info& unit : file.hdus()) {
+            std::cout << "HDU " << unit.index() << ":\n";
+            for (const openfits::card& value : unit.header()) {
+                const std::string_view text = value.text();
+                std::cout << "  | " << text.substr(0, text.find_last_not_of(' ') + 1) << '\n';
+            }
+        }
+        const std::vector<std::uint16_t> read = file.read_pixels<std::uint16_t>(0);
+        std::cout << "values: " << read[0] << ' ' << read[(10 * width) + 12] << " (a star)\n";
+        const std::vector<double> back = file.read_pixels<double>(file.hdu("PHYSICAL").index());
+        std::cout << "physical values: " << back[0] << " (BLANK) " << back[(10 * width) + 12] << '\n';
+        return read == values ? 0 : 1;
+    } catch (const std::exception& failure) {
+        (void)std::fputs("write_image: ", stderr);
+        (void)std::fputs(failure.what(), stderr);
+        (void)std::fputs("\n", stderr);
+        return 1;
+    }
+}

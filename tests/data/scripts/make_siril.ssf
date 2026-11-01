@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Ezequiel Ruiz
+#
+# The commands that make_siril.py runs with siril-cli in its working directory.
+requires 1.4.0
+setext fits
+set32bits
+
+# E3: the pattern image saved as 32-bit floats, with an ICC profile.
+load pattern-f32
+icc_assign sRGB
+save e3-siril-f32
+
+# E6: a CFA frame, saved as 16-bit integers with its Bayer keywords.
+set16bits
+load cfa
+save e6-siril-cfa
+
+# E4: three frames converted into one FITSEQ file.
+set32bits
+cd frames
+convert frame -fitseq
