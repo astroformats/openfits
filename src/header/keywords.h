@@ -17,8 +17,9 @@ namespace openfits::detail {
 [[nodiscard]] std::optional<std::uint32_t> keyword_index(std::string_view name, std::string_view root) noexcept;
 
 /// True for the keywords that the library writes from the model of a unit: SIMPLE, BITPIX, NAXIS, NAXISn, EXTEND,
-/// XTENSION, PCOUNT, GCOUNT, GROUPS, TFIELDS, TFORMn, TBCOLn, THEAP, BSCALE, BZERO, BLANK, TSCALn, TZEROn, TNULLn,
-/// TDIMn, the keywords of tiled compression (standard §10), CHECKSUM, DATASUM, CONTINUE and END.
+/// XTENSION, PCOUNT, GCOUNT, GROUPS, TFIELDS, TTYPEn, TFORMn, TBCOLn, TUNITn, THEAP, BSCALE, BZERO, BLANK, TSCALn,
+/// TZEROn, TNULLn, TDISPn, TDIMn, the keywords of tiled compression (standard §10), CHECKSUM, DATASUM, CONTINUE and
+/// END.
 [[nodiscard]] bool is_structural_keyword(std::string_view name) noexcept;
 
 /// True for the mandatory and reserved keywords of the standard, the structural ones included: those of headers (§4.4),
@@ -36,9 +37,10 @@ enum class value_class : std::uint8_t
     date, ///< A string that holds a date (standard §9.1.1).
 };
 
-/// The type of value of a reserved keyword of standard §4.4.2 that is not structural, or of a keyword of world
-/// coordinates or time in its three forms of Table 22 with its alternates (§8, §9); nothing for any other keyword,
-/// those of tables and compression included.
+/// The type of value of a reserved keyword of standard §4.4.2 that is not structural, of a keyword of world coordinates
+/// or time in its three forms of Table 22 with its alternates (§8, §9), or of PTYPEn, PSCALn, PZEROn, TDMINn, TDMAXn,
+/// TLMINn and TLMAXn (§6.1.2, §7.2.2, §7.3.2); nothing for any other keyword, the structural ones and those of
+/// compression included.
 [[nodiscard]] std::optional<value_class> reserved_value_class(std::string_view name);
 
 } // namespace openfits::detail

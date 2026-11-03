@@ -5,8 +5,11 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <cstdint>
 #include <limits>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -120,6 +123,81 @@ TEST(decimal, fixed_digits_of_small_values_round_to_one_unit_of_the_last_place_o
     fixed = round_fixed(exact_digits(0.0), 3);
     EXPECT_EQ(fixed.integer, "");
     EXPECT_EQ(fixed.fraction, "000");
+}
+
+// The digits for rounding round as the exact ones do: values of every magnitude, ties of short exact digits, values
+// just below and above them, runs of nines that carry, and the ends of the range.
+TEST(decimal, rounding_digits_round_as_the_exact_digits_do)
+{
+    std::vector<double> values{0.5,
+                               0.125,
+                               2.5,
+                               0.375,
+                               9.5,
+                               99.995,
+                               2.675,
+                               0.15,
+                               0.005,
+                               0.0096,
+                               0.004,
+                               1.5,
+                               12.125,
+                               1e20,
+                               1e-20,
+                               1e300,
+                               1e-300,
+                               9.9999,
+                               0.1,
+                               1.0,
+                               2.0,
+                               1.0 / 3,
+                               25.04,
+                               0.9999,
+                               999.5,
+                               1234.5,
+                               9.96,
+                               0.0005,
+                               5e-7,
+                               7.5e5,
+                               1e22,
+                               1e23,
+                               0.07,
+                               std::numeric_limits<double>::max(),
+                               std::numeric_limits<double>::min(),
+                               std::numeric_limits<double>::denorm_min()};
+    std::uint64_t state = 1;
+    for (int i = 0; i < 2000; ++i) {
+        state = (state * 6364136223846793005U) + 1442695040888963407U;
+        const double mantissa = static_cast<double>(state >> 11U) / static_cast<double>(std::uint64_t{1} << 53U);
+        const int exponent = static_cast<int>((state >> 3U) % 80U) - 40;
+        values.push_back(std::ldexp(mantissa, exponent * 3));
+    }
+    const std::size_t count = values.size();
+    for (std::size_t i = 0; i < count; ++i) {
+        values.push_back(std::nextafter(values[i], 0.0));
+        if (values[i] < std::numeric_limits<double>::max()) {
+            values.push_back(std::nextafter(values[i], std::numeric_limits<double>::infinity()));
+        }
+    }
+    for (const double value : values) {
+        const decimal_digits exact = exact_digits(value);
+        for (std::size_t most = 1; most <= 20; ++most) {
+            const decimal_digits rounding = openfits::detail::rounding_digits(value, most);
+            for (std::size_t digits = 1; digits <= most; ++digits) {
+                const decimal_digits ours = round_significant(rounding, digits);
+                const decimal_digits theirs = round_significant(exact, digits);
+                ASSERT_EQ(ours.digits, theirs.digits) << value << " " << most << " " << digits;
+                ASSERT_EQ(ours.exponent, theirs.exponent) << value << " " << most << " " << digits;
+            }
+        }
+        for (std::size_t places = 0; places <= 20; ++places) {
+            const openfits::detail::fixed_digits ours =
+                round_fixed(openfits::detail::fixed_rounding_digits(value, places), places);
+            const openfits::detail::fixed_digits theirs = round_fixed(exact, places);
+            ASSERT_EQ(ours.integer, theirs.integer) << value << " " << places;
+            ASSERT_EQ(ours.fraction, theirs.fraction) << value << " " << places;
+        }
+    }
 }
 
 } // namespace

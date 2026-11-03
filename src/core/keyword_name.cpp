@@ -59,11 +59,12 @@ bool has_wildcards(std::string_view pattern) noexcept
     return pattern.find_first_of("*?#") != std::string_view::npos;
 }
 
-bool match_keyword(std::string_view pattern, std::string_view name) noexcept
+bool match_keyword(std::string_view pattern, std::string_view name, bool exact_case) noexcept
 {
-    if (equal_ignoring_case(pattern, name)) {
+    if (exact_case ? pattern == name : equal_ignoring_case(pattern, name)) {
         return true;
     }
+    const auto same = [exact_case](char a, char b) { return exact_case ? a == b : to_upper(a) == to_upper(b); };
     // Wildcard matching that keeps the position of the last * to come back to, which bounds the work by the product of
     // the lengths: names and patterns are short.
     std::size_t p = 0;
@@ -79,7 +80,7 @@ bool match_keyword(std::string_view pattern, std::string_view name) noexcept
             while (n < name.size() && is_digit(name[n])) {
                 ++n;
             }
-        } else if (p < pattern.size() && (pattern[p] == '?' || to_upper(pattern[p]) == to_upper(name[n]))) {
+        } else if (p < pattern.size() && (pattern[p] == '?' || same(pattern[p], name[n]))) {
             ++p;
             ++n;
         } else if (star != std::string_view::npos) {

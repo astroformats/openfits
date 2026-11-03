@@ -8,6 +8,7 @@
 #include <openfits/reader.h>
 #include <openfits/types.h>
 
+#include "data/conversion.h"
 #include "io/thread_safe_source.h"
 
 #include <cstddef>
@@ -54,10 +55,24 @@ struct region_selection
 ///         when the span does not fit in 64 bits.
 [[nodiscard]] std::uint64_t destination_span(const region_selection& selection, std::uint64_t pitch);
 
+/// A read of values, once checked: its region, and the conversion of its values, none when the region has no element.
+struct pixel_read_plan
+{
+    region_selection selection{};
+    std::optional<read_conversion> conversion{};
+};
+
+/// Checks a read of the values of image, the image of unit, into destination as values of type, and prepares the
+/// conversion of its values: the exceptions of reader::read_pixels() for its arguments, for a unit whose header gives
+/// no size of its data, and for its scaling.
+[[nodiscard]] pixel_read_plan plan_pixel_read(const hdu_info& unit, const image_info& image, numeric_type type,
+                                              std::span<std::byte> destination, const pixel_read_options& options);
+
 /// Reads the values of image, the image of unit, that options select from source into destination, as values of
-/// type, with at most transfer bytes taken from the source at once: the exceptions of reader::read_pixels().
+/// type, with at most transfer bytes taken from the source at once: the exceptions of reader::read_pixels(). The array
+/// starts array_offset bytes after the start of the data of the unit, as that of a random group does.
 pixel_read_result read_pixels(const thread_safe_source& source, const hdu_info& unit, const image_info& image,
                               numeric_type type, std::span<std::byte> destination, const pixel_read_options& options,
-                              std::size_t transfer = pixel_transfer);
+                              std::size_t transfer = pixel_transfer, std::uint64_t array_offset = 0);
 
 } // namespace openfits::detail

@@ -58,6 +58,9 @@ std::string header_blocks(std::span<const card> structural, const header& caller
                        options.records);
     }
     blocks += records;
+    for (const card& value : options.closing) {
+        append_records(blocks, value, options.records);
+    }
 
     std::string blank(record_length, ' ');
     for (std::size_t i = 0; i < options.reserved_cards; ++i) {

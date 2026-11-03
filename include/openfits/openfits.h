@@ -4,6 +4,8 @@
 #pragma once
 
 #include <openfits/card.h>
+#include <openfits/checksum.h>
+#include <openfits/compression.h>
 #include <openfits/error.h>
 #include <openfits/export.h>
 #include <openfits/hdu.h>
@@ -13,6 +15,7 @@
 #include <openfits/limits.h>
 #include <openfits/reader.h>
 #include <openfits/stream_io.h>
+#include <openfits/table.h>
 #include <openfits/types.h>
 #include <openfits/version.h>
 #include <openfits/writer.h>

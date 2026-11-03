@@ -1,0 +1,101 @@
+0	SIMPLE	bool	T	conforms to FITS standard
+0	BITPIX	int	8	array data type
+0	NAXIS	int	0	number of array dimensions
+0	EXTEND	bool	T	
+0	ORIGIN	str	OpenFITS samples	an empty primary HDU
+1	XTENSION	str	BINTABLE	binary table extension
+1	BITPIX	int	8	8-bit bytes
+1	NAXIS	int	2	2-dimensional binary table
+1	NAXIS1	int	8	width of table in bytes
+1	NAXIS2	int	23	number of rows in table
+1	PCOUNT	int	1035	size of special data area
+1	GCOUNT	int	1	one data group (required keyword)
+1	TFIELDS	int	1	number of fields in each row
+1	TTYPE1	str	COMPRESSED_DATA	label for field   1
+1	TFORM1	str	1PB(45)	data format of field: variable length array
+1	ZIMAGE	bool	T	extension contains compressed image
+1	ZTILE1	int	37	size of tiles to be compressed
+1	ZTILE2	int	1	size of tiles to be compressed
+1	ZCMPTYPE	str	RICE_1	compression algorithm
+1	ZNAME1	str	BLOCKSIZE	compression block size
+1	ZVAL1	int	32	pixels per block
+1	ZNAME2	str	BYTEPIX	bytes per pixel (1, 2, 4, or 8)
+1	ZVAL2	int	2	bytes per pixel (1, 2, 4, or 8)
+1	ZTENSION	str	IMAGE	Image extension
+1	ZBITPIX	int	16	array data type
+1	ZNAXIS	int	2	number of array dimensions
+1	ZNAXIS1	int	37	
+1	ZNAXIS2	int	23	
+1	ZPCOUNT	int	0	number of parameters
+1	ZGCOUNT	int	1	number of groups
+1	BSCALE	int	1	
+1	BZERO	int	32768	
+1	EXTNAME	str	SCI	extension name
+1	EXTVER	int	1	extension value
+1	FILTER	str	L	the first image
+2	XTENSION	str	BINTABLE	binary table extension
+2	BITPIX	int	8	8-bit bytes
+2	NAXIS	int	2	2-dimensional binary table
+2	NAXIS1	int	32	width of table in bytes
+2	NAXIS2	int	23	number of rows in table
+2	PCOUNT	int	3274	size of special data area
+2	GCOUNT	int	1	one data group (required keyword)
+2	TFIELDS	int	4	number of fields in each row
+2	TTYPE1	str	COMPRESSED_DATA	label for field   1
+2	TFORM1	str	1PB(121)	data format of field: variable length array
+2	TTYPE2	str	ZSCALE	label for field   2
+2	TFORM2	str	1D	data format of field: 8-byte DOUBLE
+2	TTYPE3	str	ZZERO	label for field   3
+2	TFORM3	str	1D	data format of field: 8-byte DOUBLE
+2	ZIMAGE	bool	T	extension contains compressed image
+2	ZTILE1	int	37	size of tiles to be compressed
+2	ZTILE2	int	1	size of tiles to be compressed
+2	ZCMPTYPE	str	RICE_1	compression algorithm
+2	ZNAME1	str	BLOCKSIZE	compression block size
+2	ZVAL1	int	32	pixels per block
+2	ZNAME2	str	BYTEPIX	bytes per pixel (1, 2, 4, or 8)
+2	ZVAL2	int	4	bytes per pixel (1, 2, 4, or 8)
+2	ZTENSION	str	IMAGE	Image extension
+2	ZBITPIX	int	-32	array data type
+2	ZNAXIS	int	2	number of array dimensions
+2	ZNAXIS1	int	37	
+2	ZNAXIS2	int	23	
+2	ZPCOUNT	int	0	number of parameters
+2	ZGCOUNT	int	1	number of groups
+2	EXTNAME	str	SCI	extension name
+2	EXTVER	int	2	extension value
+2	GAIN	float	1.25	[e-/ADU] the second image
+2	ZQUANTIZ	str	SUBTRACTIVE_DITHER_1	Pixel Quantization Algorithm
+2	HISTORY	commentary	Image was compressed by CFITSIO using scaled integer quantization:	
+2	HISTORY	commentary	  q = 4.000000 / quantized level scaling parameter	
+2	HISTORY	commentary	'SUBTRACTIVE_DITHER_1' / Pixel Quantization Algorithm	
+2	ZDITHER0	int	859	dithering offset when quantizing floats
+2	TTYPE4	str	GZIP_COMPRESSED_DATA	label for field
+2	TFORM4	str	1PB(171)	format of field
+3	XTENSION	str	BINTABLE	binary table extension
+3	BITPIX	int	8	8-bit bytes
+3	NAXIS	int	2	2-dimensional binary table
+3	NAXIS1	int	8	width of table in bytes
+3	NAXIS2	int	7	number of rows in table
+3	PCOUNT	int	42	size of special data area
+3	GCOUNT	int	1	one data group (required keyword)
+3	TFIELDS	int	1	number of fields in each row
+3	TTYPE1	str	COMPRESSED_DATA	label for field   1
+3	TFORM1	str	1PB(6)	data format of field: variable length array
+3	ZIMAGE	bool	T	extension contains compressed image
+3	ZTILE1	int	11	size of tiles to be compressed
+3	ZTILE2	int	1	size of tiles to be compressed
+3	ZCMPTYPE	str	RICE_1	compression algorithm
+3	ZNAME1	str	BLOCKSIZE	compression block size
+3	ZVAL1	int	32	pixels per block
+3	ZNAME2	str	BYTEPIX	bytes per pixel (1, 2, 4, or 8)
+3	ZVAL2	int	1	bytes per pixel (1, 2, 4, or 8)
+3	ZTENSION	str	IMAGE	Image extension
+3	ZBITPIX	int	8	array data type
+3	ZNAXIS	int	2	number of array dimensions
+3	ZNAXIS1	int	11	
+3	ZNAXIS2	int	7	
+3	ZPCOUNT	int	0	number of parameters
+3	ZGCOUNT	int	1	number of groups
+3	EXTNAME	str	MASK	extension name
+3	MASKED	bool	T	the mask

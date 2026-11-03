@@ -3,10 +3,12 @@
 
 #pragma once
 
+#include <openfits/checksum.h>
 #include <openfits/error.h>
 #include <openfits/types.h>
 
 #include <cstdint>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -46,6 +48,12 @@ struct sample_unit
     std::vector<std::uint64_t> axes{};
     /// The values that its content does not give.
     std::vector<special_value> specials{};
+    /// The largest difference between its values and its content, for an image compressed with a loss; empty for the
+    /// tolerance of the last place of its stored type.
+    std::optional<double> tolerance{};
+    /// What its DATASUM and CHECKSUM say of it (standard §4.4.2.7).
+    checksum_state datasum = checksum_state::absent;
+    checksum_state checksum = checksum_state::absent;
 };
 
 /// A sample file of tests/data, written by other software, and what is known about it independently of the reader.

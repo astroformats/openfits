@@ -167,6 +167,10 @@ enum class blank_policy : std::uint8_t
     /// A mask alongside the destination marks them with 1, and the other values with 0; the destination holds NaN for
     /// them, or 0 when it holds integers.
     mask,
+    /// No stored value is undefined: BLANK and TNULLn are not applied, and their values convert as any other, as with
+    /// no null checking in CFITSIO. A NaN of floating-point data stays one, as with nan, and an undefined logical is
+    /// undefined still.
+    ignore,
 };
 
 /// What a conversion does with a value beyond the range of its destination.

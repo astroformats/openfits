@@ -51,7 +51,8 @@ struct astropy_card
 std::vector<astropy_card> astropy_cards(const sample& unit)
 {
     std::string path = openfits::test::sample_path(unit);
-    path.replace(path.rfind(".fits"), 5, ".cards");
+    // b15-mef.fits.fz has b15-mef.cards, as the extension of the samples is .fits or .fit and maybe .fz.
+    path.replace(path.rfind(".fit"), path.size(), ".cards");
     std::ifstream file(path, std::ios::binary);
     std::vector<astropy_card> cards;
     for (std::string line; std::getline(file, line);) {

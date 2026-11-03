@@ -9,13 +9,19 @@ that does not depend on any application, so that it can replace CFITSIO in C++ p
 [AstroFormats](https://github.com/astroformats), after [OpenXISF](https://github.com/astroformats/openxisf), and
 shares its design.
 
-**Status: 0.1.0.** An early release, which reads and writes headers and images: the primary array and `IMAGE`
-extensions with every `BITPIX`, their values converted into any numeric type with the scaling, undefined values and
-unsigned conventions of the standard, read whole or as regions with steps, into memory of the library or of the
-application. Tables, checksums, tiled compression, gzip-compressed files and editing in place come in later releases,
-and the API may change before 1.0. Files are read from, written to and edited through sources, sinks and devices of the
-library or of the application; their header and data units are walked as they are asked for, and their headers read as
-typed values and changed.
+**Status: 0.3.0.** An early release, which reads and writes headers, images, tables, checksums and tiled compression:
+the primary array and `IMAGE` extensions with every `BITPIX`, their values converted into any numeric type with the
+scaling, undefined values and unsigned conventions of the standard, read whole or as regions with steps, into memory of
+the library or of the application; binary and ASCII tables, every column type and variable-length arrays among them;
+random groups, read; `DATASUM` and `CHECKSUM`, verified as data are read and written on request; and images and tables
+compressed in tiles with every algorithm of the standard, quantization and dithering among them. gzip-compressed files
+and editing in place come in later releases, and the API may change before 1.0. The ABI holds within a minor version:
+the shared library of each minor version has a soname of its own (`libopenfits.so.0.3` for 0.3.x), and from 0.2 on a
+DLL name of its own on Windows (`openfits-0.3.dll`, `libopenfits-0.3.dll` with MinGW, where 0.1 has `openfits.dll` and
+`libopenfits.dll`), so a program built against 0.2 is rebuilt to use 0.3. The import library keeps its name
+(`openfits.lib`, `libopenfits.dll.a`), so a program links as before. Files are read from, written to and edited through
+sources, sinks and devices of the library or of the application; their header and data units are walked as they are
+asked for, and their headers read as typed values and changed.
 
 ## Features and conformance
 
@@ -25,12 +31,12 @@ typed values and changed.
 | Header cards: fixed and free format, strings, logicals, integers, reals, complex and undefined values, commentary, units, display formats, reserved header space | Yes | Yes | Planned |
 | Long strings (`CONTINUE`), `HIERARCH` keywords, `INHERIT` and `LONGSTRN` as keywords | Yes | Yes | Planned |
 | Pixel data: big-endian to native order, `BSCALE`, `BZERO` and `BLANK`, the unsigned conventions, conversion to any numeric type, regions with steps | Yes | Yes: whole images | Planned |
-| Binary tables (`BINTABLE`): every column type, variable-length arrays, scaling and nulls | Planned | Planned | Planned |
-| ASCII tables (`TABLE`) | Planned | Planned | Planned |
-| Random groups | Planned | Not planned (deprecated by the standard) | Not planned |
-| Checksums (`CHECKSUM` and `DATASUM`) | Planned | Planned | Planned |
-| Tiled image compression: `RICE_1`, `GZIP_1`, `GZIP_2`, `PLIO_1`, `HCOMPRESS_1` and `NOCOMPRESS`, with quantization and dithering | Planned | Planned | Planned: keywords in place, regions re-encode the unit |
-| Tiled table compression | Planned | Planned | Planned: keywords in place, cells through a rewrite |
+| Binary tables (`BINTABLE`): every column type, repeat counts of 0, dimensions, substrings, scaling, the unsigned conventions, nulls, display formats, variable-length arrays with `P` and `Q` descriptors | Yes | Yes | Planned |
+| ASCII tables (`TABLE`): `A`, `I`, `F`, `E` and `D` fields, null strings, blank fields, implied decimal points | Yes | Yes | Planned |
+| Random groups: parameters, by index and by name, and the array of each group | Yes | Not planned (deprecated by the standard) | Not planned |
+| Checksums (`CHECKSUM` and `DATASUM`): verified in reads of whole images, on request and at a strict open, the header part as units are walked; written on request | Yes | Yes | Planned |
+| Tiled image compression: `RICE_1`, `GZIP_1`, `GZIP_2`, `PLIO_1`, `HCOMPRESS_1` and `NOCOMPRESS`, with quantization and dithering, null pixels and a cache of decoded tiles | Yes | Yes | Planned: keywords in place, regions re-encode the unit |
+| Tiled table compression: `RICE_1`, `GZIP_1`, `GZIP_2` and `NOCOMPRESS` columns, variable-length arrays among them | Yes | Yes | Planned: keywords in place, cells through a rewrite |
 | gzip-compressed files (`.fits.gz`) | Planned | Planned | Not applicable |
 | Extensions of unknown type, special records | Yes (raw) | Planned: copied unchanged | Planned: copied unchanged |
 | File specifications `file.fits[2]`, `file.fits[SCI,1]`, `file.fits[1][*,1:100]`, parsed when asked for | Yes | Not applicable | Planned: unit selection |
@@ -41,6 +47,30 @@ Editing means changing an existing file in place: keywords, data values, appende
 for every change of layout. Not planned: evaluating world coordinates (the work of a coordinate library), the filtering
 and calculator syntax of CFITSIO's extended file names, the hierarchical grouping convention, and writing random
 groups. The table is updated at each release.
+
+### Tiled compression
+
+Compressed images and tables are read as the files of `fpack` and of the other writers have them, their older markings
+included (`ZCMPTYPE = 'RICE_ONE'`, `ZQUANTIZ = 'NONE'`, `ZSCALE` and `ZZERO` as keywords). The writer compresses with
+the parameters of `fpack`, and its `RICE_1`, `PLIO_1`, `HCOMPRESS_1` and quantized tiles are the bytes that CFITSIO
+writes for the same parameters, but where CFITSIO's would not restore the image: a `PLIO_1` run of zeros of a multiple
+of 4095 pixels before a single pixel, a lossy `HCOMPRESS_1` tile that holds undefined pixels, which the writer
+compresses losslessly, and a floating-point tile whose quantization would restore infinities, which it keeps as its
+values. A lossy `HCOMPRESS_1` tile restores values a little beyond those it compressed, which a read takes to the
+nearest value of the type of the image. A floating-point image compressed without a quantization level is lossless: its tiles
+hold its values with `GZIP_2` and no `ZQUANTIZ`, the form of standard §10.2.1, which CFITSIO, `funpack`, `fitsverify`
+and astropy read. The writer writes `NOCOMPRESS` for any `BITPIX`, and CFITSIO for 16-bit and 32-bit integers and
+32-bit floats only.
+
+Other readers read what the writer writes, with these exceptions, each a limit of the reader, of CFITSIO 4.7.0 (and
+its `funpack`) and astropy 8.0.1:
+- CFITSIO decompresses no image of 64-bit integers, which `fpack` does not compress either; the writer compresses them
+  with `GZIP_2` by default.
+- `RICE_1` of 64-bit integers (`BYTEPIX` 8, standard Table 37), which the writer writes only on request, has no decoder
+  in CFITSIO and astropy; astropy also fails on `NOCOMPRESS` images of 64-bit integers.
+- CFITSIO refuses a table column whose `ZCTYPn` is `NOCOMPRESS`, which standard §10.3.5 allows and the writer writes
+  only on request, and it crashes on a compressed table with a column of variable-length arrays of characters or bits
+  (`PA`, `PX`), the files of `fpack` included.
 
 ## Requirements and platforms
 
@@ -72,14 +102,15 @@ it, in the configuration of the run with a multi-configuration generator (`ctest
 the package accepts.
 
 Other presets run the tests under analysis tools: `linux-gcc-asan`, `linux-clang-asan` and `msvc-asan` (AddressSanitizer;
-the Linux ones add UndefinedBehaviorSanitizer), `linux-clang-tsan` (ThreadSanitizer) and `linux-gcc-coverage`.
+the Linux ones add UndefinedBehaviorSanitizer), `linux-clang-tsan` and `linux-clang-tsan-tbb` (ThreadSanitizer, the
+second with oneTBB) and `linux-gcc-coverage`.
 
 ### Dependencies
 
-- **vcpkg, manifest mode.** Set `VCPKG_ROOT` to a vcpkg checkout. The `msvc`, `clang-cl` and `linux-clang-libcxx`
-  presets use it automatically, and `vcpkg.json` pins the versions with a baseline. `linux-clang-libcxx` builds the
-  dependencies against libc++ too, with the triplet of `cmake/vcpkg`: it needs libc++, and `CC` and `CXX` set to
-  Clang. With the other presets add `-DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake`.
+- **vcpkg, manifest mode.** Set `VCPKG_ROOT` to a vcpkg checkout. The `msvc`, `clang-cl`, `linux-clang-libcxx` and
+  `linux-clang-tsan-tbb` presets use it automatically, and `vcpkg.json` pins the versions with a baseline.
+  `linux-clang-libcxx` builds the dependencies against libc++ too, and `linux-clang-tsan-tbb` with ThreadSanitizer, with
+  the triplets of `cmake/vcpkg`: they need `CC` and `CXX` set to Clang, and the first libc++. With the other presets add `-DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake`.
   Optional dependencies are features: `-DVCPKG_MANIFEST_FEATURES="tests;tbb;benchmarks"`.
 - **Linux.** `sudo apt install pkg-config zlib1g-dev libgtest-dev`, `libtbb-dev` for oneTBB and `libbenchmark-dev` for
   the benchmarks.
@@ -249,14 +280,100 @@ scaled.bitpix = openfits::bitpix::int16;
 scaled.scaling = {.scale = 0.01, .zero = 327.68};
 scaled.blank = -32768;
 (void)output.add_image(scaled, std::span<const float>(physical));
-output.save(path);
+output.save(path, {.checksums = true, .checksum_time = openfits::to_date_time(observed + std::chrono::hours{2})});
 ```
 
 A write into integer data rounds half away from zero, and refuses a value beyond the range of the stored type, or clamps
-it on request. `save()` replaces a file only once the new one is complete, or refuses to replace one
-(`if_exists::fail`), and writes into any sink as well: `samples/stream_io.cpp` writes through a `std::ofstream`, and
-reads the file back through a `std::ifstream` and a `FILE*`. The examples of editing files arrive with that part of the
-API.
+it on request; with `scaling_policy::raw` in its options, an image of stored values, such as a frame read raw, is
+written as it is, under the `BSCALE` and `BZERO` of its description, and with `scaling_policy::override` its values
+convert into stored ones by a scaling of the caller's instead: codes of `std::uint16_t` with the offset of their type,
+under a scaling of the application's, for instance. `save()` replaces a file only once the new one is
+complete, or refuses to replace one (`if_exists::fail`), and writes into any sink as well: `samples/stream_io.cpp`
+writes through a `std::ofstream`, and reads the file back through a `std::ifstream` and a `FILE*`. The examples of
+editing files arrive with that part of the API.
+
+With `checksums` in its options, `save()` gives every unit `DATASUM`, the sum of its data, and `CHECKSUM`, which makes the
+sum of the whole unit negative zero (standard §4.4.2.7), their comment the time of the application, since the library
+reads no clock. A read of a whole image verifies the `DATASUM` of its unit in the same pass as the read, and throws
+`integrity_error` once the values are in the destination when the data do not match it (`verify_checksum = false` reads
+a damaged unit for what it holds); the header part of `CHECKSUM` is checked as each unit is walked, a mismatch being a
+warning among its diagnostics, and a strict open verifies every unit. `verify()` reads a whole unit of any kind and
+tells, for each sum, whether it is valid, invalid or absent, a blank or undefined value asserting nothing; like a read,
+it takes a progress function that can cancel it:
+
+```cpp
+const openfits::checksum_report sums = file.verify(unit.index());
+std::cout << "  DATASUM " << state_name(sums.datasum) << ", CHECKSUM " << state_name(sums.checksum) << '\n';
+```
+
+An image or a table is compressed in tiles (standard §10) when its options, or those of `save()` for the units that
+give none, carry `compression_options`: the algorithm, the shape of the tiles, and for floating-point images the level
+of the quantization and its dithering. The tiles are compressed in parallel in a build with oneTBB. A compressed image
+is read as any other, the tiles that a read meets decompressed, in parallel too; a `tile_cache` of the caller's, which
+threads can share, keeps decoded tiles for reads row by row. A compressed primary array is unit 1 after an empty
+primary, as the standard writes it. This excerpt of `samples/write_image.cpp` writes the frame again, compressed with
+`RICE_1` in tiles of 16 rows:
+
+```cpp
+openfits::image_info packed = image;
+packed.header.set("EXTNAME", "RICE");
+(void)output.add_image(packed, std::span<const std::uint16_t>(values),
+                       {.compression = openfits::compression_options{.type = openfits::compression::rice,
+                                                                     .tile = {width, 16}}});
+```
+
+```cpp
+openfits::tile_cache cache(std::uint64_t{16} << 20);  // 16 MiB of decoded tiles.
+for (std::uint64_t y = 0; y < height; ++y) {
+    (void)file.read_pixels(unit, std::span<std::uint16_t>(row),
+                           {.region = openfits::region{.start = {0, y}, .size = {width, 1}}, .cache = &cache});
+}
+```
+
+`samples/convert.cpp` reads an image of any `BITPIX`, compressed or not, and writes it as another, compressed or not;
+`samples/compress.cpp` compresses the images of a file as `fpack` does, on every core. On one core, its work on a
+camera frame of 6000 x 4000 pixels takes three quarters of the time of `fpack` 1.7.0 for 16-bit values with `RICE_1`,
+and three fifths for 32-bit floating-point values quantized at `q = 4` (an AMD Ryzen 9 9950X under Windows 11, both
+built by MSVC); with oneTBB, the tiles of each image are compressed on every core.
+
+`file.table(index)` describes a table, ASCII or binary: its rows and columns, the format, dimensions, scaling, null and
+unit of each, and the heap of variable-length arrays. A column is read over a range of rows as any numeric type, scaled,
+its undefined values given as the policy of the read says, or as strings through its display format; several columns
+are read in one pass over the rows, and the arrays of a column of variable-length arrays are read with their
+descriptors sorted, so that the heap is read in ranges. This excerpt of `samples/read_table.cpp` reads a column of
+numbers as `double`, its undefined values marked in a mask, then the arrays of a column of variable-length arrays:
+
+```cpp
+std::vector<double> values(rows);
+std::vector<std::uint8_t> undefined(rows);
+std::vector<openfits::column_destination> destinations{
+    openfits::column_destination::of(index, std::span<double>(values), std::span<std::uint8_t>(undefined))};
+(void)file.read_columns(unit, destinations, {.blank = openfits::blank_policy::mask});
+```
+
+```cpp
+const openfits::column_arrays<double> arrays = file.read_arrays<double>(unit, index);
+std::cout << "column " << index << ": " << arrays.size() << " arrays, " << arrays.values.size()
+          << " elements in all";
+```
+
+A table is written from a description and the values of each column, which the writer borrows: a column without a
+format takes it from the type of its values, `std::uint16_t` as 16-bit integers with `TZEROn = 32768`, strings as
+characters of the longest of them, and arrays of different lengths as variable-length arrays in a heap that the writer
+builds; an ASCII table takes fields wide enough for the values of each type.
+
+```cpp
+const std::vector<std::string> names{"M 31", "M 33", "NGC 7000"};
+const std::vector<double> fluxes{3.44, 5.72, 4.0};
+openfits::table_info table{.kind = openfits::hdu_kind::bintable, .rows = 3};
+table.columns = {{.name = "NAME"}, {.name = "FLUX", .unit = "Jy"}};
+openfits::writer output;
+(void)output.add_table(table, std::vector<openfits::column_values>{std::span(names), std::span(fluxes)});
+output.save(path);
+```
+
+`file.groups(0)` describes random groups (standard §6), whose parameters `read_parameter<T>()` reads by index, or by
+name, the parameters of one name summed as the standard says, and whose arrays `read_group<T>()` reads as an image.
 
 ## Thread safety, errors and text
 

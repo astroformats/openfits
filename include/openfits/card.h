@@ -194,6 +194,16 @@ public:
     /// @throws usage_error when record is longer than 80 bytes.
     [[nodiscard]] static card parse(std::string_view record);
 
+    /// A keyword with its value given as the text of a value field, which a record writes as it is ("1.50E+03", a
+    /// string with its quotes), and a comment: the card that parse() reads from the record the writer would make of
+    /// them, the text right-justified in bytes 11 to 30 when it is not a string and fits there.
+    /// @throws usage_error (errc::invalid_keyword) for a name that is not of standard §4.1.2.1, or that has no value:
+    ///         COMMENT, HISTORY, the blank keyword, CONTINUE and END.
+    /// @throws validation_error (errc::invalid_character) for a text or a comment outside printable ASCII, and
+    ///         (errc::value_too_long) when the record does not hold them.
+    [[nodiscard]] static card with_value_text(std::string_view keyword, std::string_view value_text,
+                                              std::string_view comment = {});
+
     /// The keyword, in its canonical form: in upper case, with the spaces of a name of the HIERARCH convention made
     /// single.
     [[nodiscard]] std::string_view keyword() const noexcept

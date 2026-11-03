@@ -296,6 +296,10 @@ public:
     [[nodiscard]] std::span<const std::byte> data() const noexcept;
     /// Moves the bytes written so far out of the sink, which is empty afterwards.
     [[nodiscard]] std::vector<std::byte> release() noexcept;
+    /// Allocates room for bytes in all, so that writes up to that many bytes allocate nothing: with writer::size(), a
+    /// save into memory allocates once.
+    /// @throws limit_error (errc::allocation_too_large) when bytes does not fit in memory, and std::bad_alloc.
+    void reserve(std::uint64_t bytes);
 
 private:
     std::vector<std::byte> data_;

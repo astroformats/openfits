@@ -5,6 +5,7 @@
 
 #include <openfits/error.h>
 
+#include "compress/image_tiles.h"
 #include "data/conversion.h"
 
 #include <cstdint>
@@ -21,11 +22,7 @@ image_info describe_image(const hdu_info& unit, bool with_header)
     case hdu_kind::image:
         break;
     case hdu_kind::compressed_image:
-        throw unsupported_error(errc::unsupported_compression,
-                                "unit " + std::to_string(unit.index()) +
-                                    " holds a tiled compressed image (standard §10.1), which this version does not "
-                                    "decompress",
-                                where);
+        return describe_compressed_image(unit, with_header).image;
     case hdu_kind::table:
     case hdu_kind::bintable:
     case hdu_kind::compressed_table:
@@ -33,7 +30,11 @@ image_info describe_image(const hdu_info& unit, bool with_header)
     case hdu_kind::unknown:
         throw usage_error(errc::not_an_image, "unit " + std::to_string(unit.index()) + " holds no image", where);
     }
+    return describe_array(unit, with_header);
+}
 
+image_info describe_array(const hdu_info& unit, bool with_header)
+{
     const header& cards = unit.header();
     const auto value = cards.value<std::int64_t>("BITPIX");
     const std::optional<openfits::bitpix> stored = bitpix_of(value);

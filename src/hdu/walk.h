@@ -9,6 +9,7 @@
 #include <openfits/limits.h>
 
 #include "core/diagnostic_log.h"
+#include "hdu/header_reader.h"
 #include "hdu/structure.h"
 #include "io/thread_safe_source.h"
 
@@ -57,9 +58,11 @@ public:
     /// @throws the exceptions of the source.
     [[nodiscard]] std::vector<std::reference_wrapper<const hdu_info>> units();
 
-    /// The index of the first unit for which match is true, walking as far as it; nothing when none is.
+    /// The index of the first unit at or after index from for which match is true, walking as far as it; nothing when
+    /// none is.
     /// @throws the error that stopped the walk before such a unit, and the exceptions of the source.
-    [[nodiscard]] std::optional<std::size_t> find(const std::function<bool(const hdu_info&)>& match);
+    [[nodiscard]] std::optional<std::size_t> find(const std::function<bool(const hdu_info&)>& match,
+                                                  std::size_t from = 0);
 
     /// The diagnostics of the walk that are not of a header.
     [[nodiscard]] std::vector<diagnostic> diagnostics() const;
@@ -81,6 +84,8 @@ private:
     mutable std::mutex mutex_;
     std::deque<hdu_info> units_;
     diagnostic_log log_;
+    // The bytes of the last read of the walk, which serve the headers of small units after it.
+    read_window window_;
     std::uint64_t next_offset_ = 0;
     std::uint64_t header_bytes_ = 0;
     std::uint64_t diagnostics_ = 0;

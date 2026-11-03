@@ -48,6 +48,9 @@ struct record_options
     bool hierarch = false;
     /// A comment that does not fit in the record is cut, rather than refused.
     bool truncate_comment = false;
+    /// The long string of a reserved keyword that is not structural is continued over CONTINUE records, rather than
+    /// refused (standard §4.2.1.2).
+    bool continue_reserved = false;
     /// The unit of the card, which the context of the errors names.
     std::optional<std::uint64_t> hdu{};
 };

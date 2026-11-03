@@ -1,0 +1,30 @@
+0	SIMPLE	bool	T	conforms to FITS standard
+0	BITPIX	int	8	array data type
+0	NAXIS	int	0	number of array dimensions
+0	EXTEND	bool	T	
+1	XTENSION	str	TABLE	ASCII table extension
+1	BITPIX	int	8	array data type
+1	NAXIS	int	2	number of array dimensions
+1	NAXIS1	int	58	length of dimension 1
+1	NAXIS2	int	4	length of dimension 2
+1	PCOUNT	int	0	number of group parameters
+1	GCOUNT	int	1	number of groups
+1	TFIELDS	int	5	number of table fields
+1	TTYPE1	str	NAME	
+1	TFORM1	str	A10	
+1	TBCOL1	int	1	
+1	TTYPE2	str	COUNT	
+1	TFORM2	str	I6	
+1	TNULL2	str	*	
+1	TBCOL2	int	11	
+1	TTYPE3	str	FLUX	
+1	TFORM3	str	F10.3	
+1	TUNIT3	str	Jy	
+1	TBCOL3	int	17	
+1	TTYPE4	str	MAG	
+1	TFORM4	str	E12.5	
+1	TBCOL4	int	27	
+1	TTYPE5	str	DIST	
+1	TFORM5	str	D20.12	
+1	TBCOL5	int	39	
+1	EXTNAME	str	ASCII	extension name

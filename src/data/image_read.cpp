@@ -5,6 +5,7 @@
 
 #include <openfits/error.h>
 
+#include "checksum/checksum.h"
 #include "core/scratch_buffer.h"
 #include "data/conversion.h"
 #include "data/image_description.h"
@@ -84,6 +85,16 @@ struct pixel_job
     std::size_t transfer = pixel_transfer;
     read_progress& progress;
     std::uint64_t clamped = 0;
+    // The sum of the stored bytes in the order of the data, for DATASUM; null when the read does not verify it.
+    checksum_accumulator* sum = nullptr;
+
+    // Adds the stored bytes just read to the sum.
+    void add_to_sum(std::span<const std::byte> bytes) const noexcept
+    {
+        if (sum != nullptr) {
+            sum->add(bytes);
+        }
+    }
 
     [[nodiscard]] std::byte* values_at(std::uint64_t element) const noexcept
     {
@@ -108,8 +119,11 @@ void read_contiguous(pixel_job& job, std::uint64_t first, std::uint64_t count, s
         check_read_range(job.source.size(), offset, count * job.stored_size, job.source.description());
         for (std::uint64_t done = 0; done < count;) {
             const std::uint64_t values = std::min(piece, count - done);
-            job.clamped += convert_read(job.conversion, held.data() + offset + (done * job.stored_size), 1,
-                                        job.values_at(destination + done), job.mask_at(destination + done), values);
+            const std::span<const std::byte> stored =
+                held.subspan(offset + (done * job.stored_size), values * job.stored_size);
+            job.add_to_sum(stored);
+            job.clamped += convert_read(job.conversion, stored.data(), 1, job.values_at(destination + done),
+                                        job.mask_at(destination + done), values);
             done += values;
             job.progress.advance(values * job.stored_size);
         }
@@ -124,6 +138,7 @@ void read_contiguous(pixel_job& job, std::uint64_t first, std::uint64_t count, s
             const std::span<std::byte> bytes(part + (values * (job.value_size - job.stored_size)),
                                              values * job.stored_size);
             job.source.read(offset + (done * job.stored_size), bytes);
+            job.add_to_sum(bytes);
             if (job.stored_size == job.value_size) {
                 job.clamped += convert_read_in_place(job.conversion, part, job.mask_at(destination + done), values);
             } else {
@@ -140,6 +155,7 @@ void read_contiguous(pixel_job& job, std::uint64_t first, std::uint64_t count, s
         const std::uint64_t values = std::min(piece, count - done);
         const std::span<std::byte> bytes = staging.bytes().first(values * job.stored_size);
         job.source.read(offset + (done * job.stored_size), bytes);
+        job.add_to_sum(bytes);
         job.clamped += convert_read(job.conversion, bytes.data(), 1, job.values_at(destination + done),
                                     job.mask_at(destination + done), values);
         done += values;
@@ -314,6 +330,7 @@ void read_runs(pixel_job& job, const region_selection& selection, std::span<cons
         for (; !walker.done(); walker.next()) {
             const pixel_run run = walker.run();
             check_read_range(job.source.size(), job.data_offset + run.offset, run.length, job.source.description());
+            job.add_to_sum(held.subspan(job.data_offset + run.offset, run.length));
             convert_run(job, run, held.data() + job.data_offset + run.offset);
             job.progress.advance(run.count * job.stored_size);
         }
@@ -351,6 +368,7 @@ void read_runs(pixel_job& job, const region_selection& selection, std::span<cons
             const pixel_run& run = group.front();
             const std::span<std::byte> bytes(job.values_at(run.destination), run.count * job.value_size);
             job.source.read(job.data_offset + run.offset, bytes);
+            job.add_to_sum(bytes);
             job.clamped += convert_read_in_place(job.conversion, bytes.data(), job.mask_at(run.destination), run.count);
             values = run.count;
         } else {
@@ -359,6 +377,7 @@ void read_runs(pixel_job& job, const region_selection& selection, std::span<cons
             }
             const std::span<std::byte> bytes = staging->bytes().first(end - start);
             job.source.read(job.data_offset + start, bytes);
+            job.add_to_sum(bytes);
             for (const pixel_run& run : group) {
                 convert_run(job, run, bytes.data() + (run.offset - start));
                 values += run.count;
@@ -441,9 +460,8 @@ std::uint64_t destination_span(const region_selection& selection, std::uint64_t 
     return ((rows - 1) * pitch) + row;
 }
 
-pixel_read_result read_pixels(const thread_safe_source& source, const hdu_info& unit, const image_info& image,
-                              numeric_type type, std::span<std::byte> destination, const pixel_read_options& options,
-                              std::size_t transfer)
+pixel_read_plan plan_pixel_read(const hdu_info& unit, const image_info& image, numeric_type type,
+                                std::span<std::byte> destination, const pixel_read_options& options)
 {
     const std::uint64_t hdu = unit.index();
     // describe_image() gives every image its BITPIX.
@@ -452,8 +470,8 @@ pixel_read_result read_pixels(const thread_safe_source& source, const hdu_info& 
                           {.hdu = hdu});
     }
     const bitpix stored = *image.bitpix;
-    const region_selection selection = select_region(options.region, image.geometry);
-    const std::uint64_t span = destination_span(selection, options.pitch);
+    pixel_read_plan plan{.selection = select_region(options.region, image.geometry)};
+    const std::uint64_t span = destination_span(plan.selection, options.pitch);
     const std::size_t value_size = size_of(type);
     if (span > std::numeric_limits<std::uint64_t>::max() / value_size) {
         throw usage_error(errc::arithmetic_overflow, "the destination of the region does not fit in 64 bits",
@@ -476,10 +494,8 @@ pixel_read_result read_pixels(const thread_safe_source& source, const hdu_info& 
                               std::to_string(hdu) + " needs " + std::to_string(span),
                           {.hdu = hdu});
     }
-    read_progress progress(options.progress, selection.elements * stored_size(stored), hdu);
-    if (selection.elements == 0) {
-        progress.report();
-        return {};
+    if (plan.selection.elements == 0) {
+        return plan;
     }
     if (!unit.data_size()) {
         throw_unavailable(unit);
@@ -508,12 +524,37 @@ pixel_read_result read_pixels(const thread_safe_source& source, const hdu_info& 
         }
         break;
     }
-    const read_conversion conversion = make_read_conversion(
-        stored, type, values, image.blank, options.blank, options.blank_value, options.overflow, options.rounding, hdu);
+    plan.conversion = make_read_conversion(stored, type, values, image.blank, options.blank, options.blank_value,
+                                           options.overflow, options.rounding, hdu);
+    return plan;
+}
+
+pixel_read_result read_pixels(const thread_safe_source& source, const hdu_info& unit, const image_info& image,
+                              numeric_type type, std::span<std::byte> destination, const pixel_read_options& options,
+                              std::size_t transfer, std::uint64_t array_offset)
+{
+    const std::uint64_t hdu = unit.index();
+    const pixel_read_plan plan = plan_pixel_read(unit, image, type, destination, options);
+    const region_selection& selection = plan.selection;
+    const bitpix stored = image.bitpix.value_or(bitpix::uint8);
+    const std::size_t value_size = size_of(type);
+    read_progress progress(options.progress, selection.elements * stored_size(stored), hdu);
+    if (!plan.conversion) {
+        progress.report();
+        return {};
+    }
+    const read_conversion& conversion = *plan.conversion;
+
+    // A read of the whole image of a unit verifies its DATASUM (standard §4.4.2.7), summing the stored bytes as they
+    // are read, then the rest of the data records: the fill of their last block, read from the file. A region does not,
+    // nor the array of a random group, which is part of its unit.
+    const bool whole = !options.region && (unit.kind() == hdu_kind::primary || unit.kind() == hdu_kind::image);
+    const recorded_datasum datasum = whole && options.verify_checksum ? datasum_of(unit.header()) : recorded_datasum{};
+    checksum_accumulator sum;
 
     progress.report();
     pixel_job job{.source = source,
-                  .data_offset = unit.data_offset(),
+                  .data_offset = unit.data_offset() + array_offset,
                   .stored_size = stored_size(stored),
                   .value_size = value_size,
                   .conversion = conversion,
@@ -521,12 +562,23 @@ pixel_read_result read_pixels(const thread_safe_source& source, const hdu_info& 
                   .destination = destination,
                   .mask = options.blank == blank_policy::mask ? options.mask.data() : nullptr,
                   .transfer = std::max<std::size_t>(transfer, 1),
-                  .progress = progress};
+                  .progress = progress,
+                  .sum = datasum.known ? &sum : nullptr};
     const std::span<const std::uint64_t> lengths = image.geometry.axes;
     if (contiguous(selection, lengths, options.pitch)) {
         read_contiguous(job, corner(selection, lengths, false), selection.elements, 0);
     } else {
         read_runs(job, selection, lengths, options.pitch);
+    }
+    if (datasum.known) {
+        const std::uint64_t read = selection.elements * job.stored_size;
+        const std::uint64_t records = data_records(unit.data_size().value_or(0));
+        if (records > read) {
+            add_source_bytes(sum, source, job.data_offset + read, records - read);
+        }
+        if (datasum.value != sum.sum()) {
+            throw_datasum_mismatch(hdu, sum.sum(), datasum);
+        }
     }
     return {.clamped = job.clamped};
 }

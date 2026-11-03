@@ -29,7 +29,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pkg-config zlib1g-dev libgtest-dev
-          pip install gcovr
+          pip install gcovr==8.8
 
       - name: Build and test with coverage
         run: |
@@ -38,12 +38,15 @@ jobs:
           ctest --preset linux-gcc-coverage
 
       # The data files come from g++-14, so the gcov must be its own: the default one is older and rejects them.
+      # gcovr counts a line once for each function that holds it, every instance of a template among them, unless told
+      # to merge them: the kernels of the conversions have an instance for each pair of a stored type and a numeric
+      # type, in both byte orders.
       - name: Report
         run: |
           mkdir -p out/coverage
           gcovr --root . --gcov-executable gcov-14 --object-directory out/build/linux-gcc-coverage \
             --exclude-directories 'out/build/[^/]+/CMakeFiles' --filter 'src/' --filter 'include/' \
-            --print-summary --html-details out/coverage/index.html
+            --merge-lines --print-summary --html-details out/coverage/index.html
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -84,7 +87,7 @@ jobs:
           restore-keys: |
             fuzz-corpus-
 
-      # Every target at once: each fuzzes for its own hour, so the step takes an hour on any number of processors.
+      # Eight targets at once, each fuzzing for its own hour: the step takes an hour for every eight targets.
       - name: Fuzz
         id: fuzz
         run: ctest --preset linux-clang-fuzz --parallel 8

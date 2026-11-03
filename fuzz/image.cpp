@@ -232,7 +232,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     // The options of the read.
     openfits::pixel_read_options options;
     const std::uint8_t type = in.next() % 10;
-    options.blank = static_cast<openfits::blank_policy>(in.next() % 3);
+    options.blank = static_cast<openfits::blank_policy>(in.next() % 4);
     options.blank_value = static_cast<double>(static_cast<std::int8_t>(in.next()));
     options.overflow = static_cast<openfits::overflow_policy>(in.next() % 2);
     options.rounding = static_cast<openfits::rounding>(in.next() % 2);

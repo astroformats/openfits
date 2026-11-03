@@ -95,6 +95,35 @@ enum class errc
                              ///< extension.
     undefined_value,         ///< An undefined value, NaN or BLANK, that the destination of a conversion cannot hold.
     unsupported_compression, ///< Data compressed in a way that this build does not decompress.
+
+    not_a_table,           ///< A unit that holds no table is asked for one: an image, random groups or an unknown
+                           ///< extension.
+    not_random_groups,     ///< A unit that holds no random groups is asked for them (standard §6).
+    invalid_column_format, ///< A TFORMn value that is not a format of standard §7.2.1 (Table 15) or §7.3.1 (Table 18),
+                           ///< or a column whose fields do not fit the rows of its table.
+    invalid_dimensions,    ///< A TDIMn value that is not of the form (l,m,...) of standard §7.3.2, or whose array is
+                           ///< larger than its field.
+    column_not_found,      ///< No column of the table has the index or the name asked for.
+    column_type,           ///< A column read as a type that its values do not convert to, such as the characters of a
+                           ///< binary table as numbers.
+    invalid_descriptor,    ///< The array descriptor of a variable-length array holds a negative value, or points
+                           ///< outside the heap (standard §7.3.5).
+    invalid_field,         ///< A field whose bytes are not a value of its type: a field of an ASCII table that is not a
+                           ///< number of standard §7.2.5, or a logical other than T, F and 0 (standard §7.3.3.1).
+    array_too_large,       ///< A variable-length array with more elements than limits::max_vla_elements, or in a heap
+                           ///< larger than limits::max_heap_bytes.
+
+    checksum_mismatch, ///< A unit that does not match its DATASUM or its CHECKSUM (standard §4.4.2.7): it changed after
+                       ///< they were computed, or the keyword holds no sum.
+
+    invalid_compression,     ///< Keywords or columns of a compressed image or table that do not describe its
+                             ///< compression (standard §10), such as a ZTILEn of 0 or a missing ZBITPIX; or a model for
+                             ///< the writer that its algorithm cannot compress, such as floating-point values for
+                             ///< RICE_1 without a quantization.
+    corrupt_compressed_data, ///< Compressed data that do not decode to the values of their tile: a stream that is
+                             ///< malformed, ends early, or holds more (standard §10.4).
+    tile_too_large,          ///< A tile larger than limits::max_tile_bytes once decompressed.
+    too_many_tiles,          ///< A compressed image or table of more tiles than limits::max_tiles.
 };
 
 /// Where in a file a problem was found. Empty or absent members are unknown or do not apply.

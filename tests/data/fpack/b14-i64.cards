@@ -1,0 +1,27 @@
+0	SIMPLE	bool	T	conforms to FITS standard
+0	BITPIX	int	8	array data type
+0	NAXIS	int	0	number of array dimensions
+0	EXTEND	bool	T	
+1	XTENSION	str	BINTABLE	binary table extension
+1	BITPIX	int	8	array data type
+1	NAXIS	int	2	number of array dimensions
+1	NAXIS1	int	8	width of table in bytes
+1	NAXIS2	int	23	number of rows in table
+1	PCOUNT	int	6112	number of group parameters
+1	GCOUNT	int	1	number of groups
+1	TFIELDS	int	1	number of fields in each row
+1	TTYPE1	str	COMPRESSED_DATA	
+1	TFORM1	str	1PB(275)	
+1	ZIMAGE	bool	T	extension contains compressed image
+1	ZTENSION	str	IMAGE	Image extension
+1	ZBITPIX	int	64	array data type
+1	ZNAXIS	int	2	number of array dimensions
+1	ZNAXIS1	int	37	
+1	ZNAXIS2	int	23	
+1	ZPCOUNT	int	0	number of parameters
+1	ZGCOUNT	int	1	number of groups
+1	ZTILE1	int	37	size of tiles to be compressed
+1	ZTILE2	int	1	size of tiles to be compressed
+1	ZCMPTYPE	str	GZIP_2	compression algorithm
+1	EXTNAME	str	COMPRESSED_IMAGE	name of this binary table extension
+1	OBJECT	str	pattern	the pattern as 64-bit integers

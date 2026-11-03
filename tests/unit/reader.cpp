@@ -5,7 +5,9 @@
 #include <openfits/io.h>
 #include <openfits/reader.h>
 
+#include "support/checksums.h"
 #include "support/counting_source.h"
+#include "support/faulty_io.h"
 #include "support/files.h"
 #include "support/fixture_builder.h"
 #include "support/temp_directory.h"
@@ -14,6 +16,8 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
@@ -110,20 +114,21 @@ TEST(reader, walks_units_when_they_are_asked_for)
     auto source = std::make_unique<counting_source>(file.bytes());
     const counting_source& counter = *source;
     const reader input(std::move(source));
-    EXPECT_EQ(counter.reads().size(), 1U);
+    constexpr std::uint64_t block = 2880;
+    EXPECT_EQ(counter.reads(), (std::vector<served_read>{{.offset = 0, .size = 4 * block}}));
+    // The four blocks of the first read end within the header of unit 1, which the walk reads with twice as many
+    // after it: the units are small, and their headers lie within the bytes of that read, up to the end of the file.
     const hdu_info& second = input.hdu(2);
-    EXPECT_EQ(counter.reads().size(), 3U);
-    EXPECT_EQ(counter.reads()[1].offset, 2880U);
-    EXPECT_EQ(counter.reads()[2].offset, 3U * 2880U);
+    EXPECT_EQ(counter.reads(),
+              (std::vector<served_read>{{.offset = 0, .size = 4 * block}, {.offset = block, .size = 6 * block}}));
     EXPECT_EQ(second.kind(), hdu_kind::image);
     EXPECT_EQ(second.header_offset(), 3U * 2880U);
     EXPECT_EQ(second.data_size(), 2880U);
     EXPECT_EQ(second.version(), 2);
     // A walked unit is not read again, and stays where it was.
     EXPECT_EQ(&input.hdu(2), &second);
-    EXPECT_EQ(counter.reads().size(), 3U);
     EXPECT_EQ(input.hdu_count(), 4U);
-    EXPECT_EQ(counter.reads().size(), 4U);
+    EXPECT_EQ(counter.reads().size(), 2U);
     EXPECT_EQ(&input.hdus()[2].get(), &second);
     EXPECT_TRUE(throws<usage_error>(errc::hdu_not_found, [&] { (void)input.hdu(4); }));
     EXPECT_TRUE(input.diagnostics().empty());
@@ -162,18 +167,62 @@ TEST(reader, finds_units_by_name_and_version)
     EXPECT_TRUE(throws<usage_error>(errc::hdu_not_found, [&] { (void)input.hdu("NONE"); }));
 }
 
-TEST(reader, finds_the_first_image_and_the_first_table)
+TEST(reader, finds_the_images_and_the_tables)
 {
     fixture file;
     file.primary();
     file.image({0, 5});
     file.header(extension_records("BINTABLE", 8, {4, 2}, 0, 1)).data(8);
     file.image({3, 3});
+    file.image({2});
     const reader input = open(file);
     EXPECT_EQ(input.first_image(), 3U);
     EXPECT_EQ(input.first_table(), 2U);
+    EXPECT_EQ(input.images(), (std::vector<std::size_t>{3, 4}));
+    EXPECT_EQ(input.tables(), (std::vector<std::size_t>{2}));
+    EXPECT_EQ(input.first_image(4), 4U);
+    EXPECT_EQ(input.first_image(5), std::nullopt);
+    EXPECT_EQ(input.first_table(3), std::nullopt);
     EXPECT_EQ(open(fixture().header(primary_records(8, {2}))).first_image(), 0U);
     EXPECT_EQ(open(fixture().primary()).first_table(), std::nullopt);
+}
+
+TEST(reader, finds_the_next_image_walking_as_far_as_it)
+{
+    constexpr std::uint64_t block = 2880;
+    fixture file;
+    file.primary();
+    for (int i = 0; i < 4; ++i) {
+        file.image({100 * block});
+    }
+    auto source = std::make_unique<counting_source>(file.bytes());
+    const counting_source& counter = *source;
+    const reader input(std::move(source));
+    EXPECT_EQ(input.first_image(), 1U);
+    EXPECT_EQ(input.first_image(2), 2U);
+    // The headers lie at blocks 0, 1, 102, 203 and 304: the walk has read no further than that of unit 2.
+    EXPECT_EQ(counter.reads().back().offset, 102 * block);
+    EXPECT_EQ(input.images(), (std::vector<std::size_t>{1, 2, 3, 4}));
+    EXPECT_EQ(counter.reads().back().offset, 304 * block);
+}
+
+TEST(reader, lists_the_images_and_the_tables_of_a_walk_that_stops_with_its_error)
+{
+    fixture file;
+    file.primary();
+    file.image({4});
+    file.header(extension_records("BINTABLE", 8, {4, 2}, 0, 1)).data(8);
+    file.header(extension_records("IMAGE", 7, {10}));
+    file.image({10});
+    const reader input = open(file);
+    EXPECT_EQ(input.first_image(), 1U);
+    EXPECT_EQ(input.first_table(), 2U);
+    // The unit of BITPIX 7 has axes, and no size: the walk stops after it.
+    EXPECT_EQ(input.first_image(2), 3U);
+    EXPECT_TRUE(throws<invalid_data_error>(errc::invalid_structure, [&] { (void)input.first_image(4); }));
+    EXPECT_TRUE(throws<invalid_data_error>(errc::invalid_structure, [&] { (void)input.first_table(3); }));
+    EXPECT_TRUE(throws<invalid_data_error>(errc::invalid_structure, [&] { (void)input.images(); }));
+    EXPECT_TRUE(throws<invalid_data_error>(errc::invalid_structure, [&] { (void)input.tables(); }));
 }
 
 TEST(reader, reads_the_bytes_of_a_data_unit)
@@ -239,9 +288,107 @@ TEST(reader, walks_every_unit_at_a_strict_open)
     auto source = std::make_unique<counting_source>(file.bytes());
     const counting_source& counter = *source;
     const reader input(std::move(source), {.strict = true});
-    EXPECT_EQ(counter.reads().size(), 4U);
+    // The headers after the first in one read, which a unit without checksums adds none to.
+    EXPECT_EQ(counter.reads().size(), 2U);
     EXPECT_EQ(input.hdu_count(), 4U);
-    EXPECT_EQ(counter.reads().size(), 4U);
+    EXPECT_EQ(counter.reads().size(), 2U);
+}
+
+// A read of the walk that fails, whole or after half its bytes, leaves none of them behind: the walk tried again reads
+// the header again, and finds the units that the file holds.
+TEST(reader, a_walk_tried_again_after_a_failed_read_reads_again)
+{
+    const fixture file = images(3);
+    const openfits::memory_source bytes(std::span<const std::byte>(file.bytes()));
+    for (const openfits::test::fault kind : {openfits::test::fault::error, openfits::test::fault::short_transfer}) {
+        // The first read is that of the primary header at the open; the second, that of unit 1, fails.
+        const reader input(std::make_unique<openfits::test::faulty_source>(bytes, 2, kind));
+        EXPECT_THROW((void)input.hdu(1), openfits::io_error);
+        EXPECT_EQ(input.hdu(2).header().value<std::int64_t>("EXTVER"), 2);
+        EXPECT_EQ(input.hdu(1).header().value<std::int64_t>("EXTVER"), 1);
+        EXPECT_EQ(input.hdu_count(), 4U);
+        EXPECT_TRUE(input.diagnostics().empty());
+    }
+}
+
+// Headers far apart, after large data, are read four blocks each, as the first is; small units close together are read
+// in reads that double, up to 256 KiB.
+TEST(reader, reads_headers_after_large_data_alone_and_small_units_together)
+{
+    constexpr std::uint64_t block = 2880;
+    fixture large;
+    large.primary();
+    for (int i = 0; i < 3; ++i) {
+        large.image({100 * block});
+    }
+    auto source = std::make_unique<counting_source>(large.bytes());
+    const counting_source& counter = *source;
+    const reader few(std::move(source));
+    EXPECT_EQ(few.hdu_count(), 4U);
+    // The header of unit 1 starts within the first read, and takes twice its blocks; those after it lie far from the
+    // bytes read before them, and take four blocks each.
+    EXPECT_EQ(counter.reads(), (std::vector<served_read>{{.offset = 0, .size = 4 * block},
+                                                         {.offset = block, .size = 8 * block},
+                                                         {.offset = 102 * block, .size = 4 * block},
+                                                         {.offset = 203 * block, .size = 4 * block}}));
+
+    fixture small;
+    small.primary();
+    for (int i = 0; i < 1000; ++i) {
+        small.image({100});
+    }
+    source = std::make_unique<counting_source>(small.bytes());
+    const counting_source& reads = *source;
+    const reader many(std::move(source));
+    EXPECT_EQ(many.hdu_count(), 1001U);
+    // 5.5 MiB of units of two blocks: each read starts at a header after the one before, and grows to 256 KiB.
+    ASSERT_GE(reads.reads().size(), 2U);
+    EXPECT_LT(reads.reads().size(), 32U);
+    for (std::size_t i = 1; i < reads.reads().size(); ++i) {
+        EXPECT_GT(reads.reads()[i].offset, reads.reads()[i - 1].offset) << i;
+        EXPECT_LE(reads.reads()[i].size, std::uint64_t{1} << 18) << i;
+    }
+}
+
+TEST(reader, a_verification_reports_progress_and_can_be_cancelled)
+{
+    // 5 MiB of data, which a verification sums in pieces of a few MiB, from memory and through reads.
+    std::vector<std::int16_t> stored(std::size_t{2048} * 1280);
+    for (std::size_t i = 0; i < stored.size(); ++i) {
+        stored[i] = static_cast<std::int16_t>(i % 30000);
+    }
+    const std::vector<std::byte> file =
+        openfits::test::checked_unit(primary_records(16, {2048, 1280}), openfits::test::big_endian(stored));
+    for (const bool in_memory : {true, false}) {
+        std::unique_ptr<openfits::input_source> source;
+        if (in_memory) {
+            // The file outlives the source, which borrows it.
+            source = std::make_unique<openfits::memory_source>(std::span<const std::byte>(file));
+        } else {
+            source = std::make_unique<counting_source>(file);
+        }
+        const reader input(std::move(source));
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> calls;
+        const openfits::checksum_report report =
+            input.verify(0, {.progress = [&](std::uint64_t done, std::uint64_t total) {
+                             calls.emplace_back(done, total);
+                             return true;
+                         }});
+        EXPECT_EQ(report.datasum, openfits::checksum_state::valid);
+        EXPECT_EQ(report.checksum, openfits::checksum_state::valid);
+        // The start, the header, and the data records in two pieces.
+        ASSERT_GE(calls.size(), 4U);
+        EXPECT_EQ(calls.front(), (std::pair<std::uint64_t, std::uint64_t>{0, file.size()}));
+        EXPECT_EQ(calls.back(), (std::pair<std::uint64_t, std::uint64_t>{file.size(), file.size()}));
+        EXPECT_TRUE(std::ranges::is_sorted(calls));
+
+        EXPECT_TRUE(throws<openfits::cancelled_error>(errc::cancelled, [&] {
+            (void)input.verify(0, {.progress = [](std::uint64_t, std::uint64_t) { return false; }});
+        }));
+        EXPECT_TRUE(throws<openfits::cancelled_error>(errc::cancelled, [&] {
+            (void)input.verify(0, {.progress = [](std::uint64_t done, std::uint64_t) { return done == 0; }});
+        }));
+    }
 }
 
 TEST(reader, keeps_the_limits_of_the_walk)

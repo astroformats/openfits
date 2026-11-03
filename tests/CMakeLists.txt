@@ -33,30 +33,42 @@ function(openfits_add_test_executable name)
 endfunction()
 
 openfits_add_test_executable(openfits_tests
+    concurrency/columns.cpp
     concurrency/io.cpp
     concurrency/pixels.cpp
+    concurrency/tiles.cpp
     concurrency/walk.cpp
+    conformance/checksums.cpp
+    conformance/compression.cpp
     conformance/datetime.cpp
     conformance/display_format.cpp
     conformance/file_structure.cpp
     conformance/headers.cpp
     conformance/images.cpp
     conformance/keyword_record.cpp
+    conformance/tables.cpp
     conformance/tolerance.cpp
     conformance/units.cpp
     conformance/value.cpp
+    samples/checksums.cpp
     samples/headers.cpp
     samples/images.cpp
     samples/sample_catalog.cpp
+    samples/tables.cpp
     support/links.cpp
     support/sparse_file.cpp
     support/temp_directory.cpp
     support/written_file.cpp
+    unit/ascii_table.cpp
     unit/calendar.cpp
     unit/callback_io.cpp
     unit/card.cpp
     unit/card_value.cpp
     unit/checked_math.cpp
+    unit/checksum.cpp
+    unit/column_format.cpp
+    unit/compressed_image.cpp
+    unit/compressed_table.cpp
     unit/conversion.cpp
     unit/decimal.cpp
     unit/device_io.cpp
@@ -65,6 +77,8 @@ openfits_add_test_executable(openfits_tests
     unit/error.cpp
     unit/file_io.cpp
     unit/file_specification.cpp
+    unit/gzip_tiles.cpp
+    unit/hcompress.cpp
     unit/header.cpp
     unit/header_emission.cpp
     unit/image_info.cpp
@@ -76,11 +90,20 @@ openfits_add_test_executable(openfits_tests
     unit/long_string.cpp
     unit/memory_io.cpp
     unit/paths.cpp
+    unit/plio.cpp
+    unit/quantize.cpp
     unit/quote.cpp
+    unit/random_groups.cpp
     unit/reader.cpp
+    unit/rice.cpp
     unit/record.cpp
     unit/stream_io.cpp
+    unit/table_heap.cpp
+    unit/table_read.cpp
+    unit/table_write.cpp
     unit/thread_safe_source.cpp
+    unit/tile_cache.cpp
+    unit/tile_grid.cpp
     unit/utf16.cpp
     unit/utf8.cpp
     unit/version.cpp

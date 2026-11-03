@@ -18,8 +18,9 @@ constexpr auto structural_names = std::to_array<std::string_view>(
     {"SIMPLE", "BITPIX", "NAXIS", "EXTEND", "XTENSION", "PCOUNT", "GCOUNT", "GROUPS", "TFIELDS", "THEAP", "BSCALE",
      "BZERO", "BLANK", "CHECKSUM", "DATASUM", "CONTINUE", "END"});
 
-constexpr auto structural_roots =
-    std::to_array<std::string_view>({"NAXIS", "TFORM", "TBCOL", "TSCAL", "TZERO", "TNULL", "TDIM"});
+// TTYPEn, TUNITn and TDISPn among them: the writer of tables writes them from the models of the columns.
+constexpr auto structural_roots = std::to_array<std::string_view>(
+    {"NAXIS", "TFORM", "TBCOL", "TSCAL", "TZERO", "TNULL", "TDIM", "TTYPE", "TUNIT", "TDISP"});
 
 // The keywords of tiled image and table compression (standard §10), which the library writes from the model.
 constexpr auto compression_names = std::to_array<std::string_view>(
@@ -94,7 +95,8 @@ constexpr auto classified_names = std::to_array<classified>({
     {"TIMEDEL", value_class::number},   {"TIMEPIXR", value_class::number},
 });
 
-// The indexed forms of Table 22 and §9, written as reserved_shapes writes them, with the type of their values.
+// The indexed forms of Table 22 and §9, and the reserved keywords of random groups (§6.1.2) and tables (§7.2.2,
+// §7.3.2) that are not structural, written as reserved_shapes writes them, with the type of their values.
 constexpr auto classified_shapes = std::to_array<classified>({
     {"WCAX#", value_class::integer}, {"CTYPE#", value_class::string}, {"CUNIT#", value_class::string},
     {"PS#_#", value_class::string},  {"CNAME#", value_class::string}, {"#CTYP#", value_class::string},
@@ -128,7 +130,9 @@ constexpr auto classified_shapes = std::to_array<classified>({
     {"TCZPH#", value_class::number}, {"TCZP#", value_class::number},  {"#CPER#", value_class::number},
     {"#CPR#", value_class::number},  {"TCPER#", value_class::number}, {"TCPR#", value_class::number},
     {"#CSYE#", value_class::number}, {"#CRDE#", value_class::number}, {"TCSYE#", value_class::number},
-    {"TCRDE#", value_class::number},
+    {"TCRDE#", value_class::number}, {"TDMIN#", value_class::number}, {"TDMAX#", value_class::number},
+    {"TLMIN#", value_class::number}, {"TLMAX#", value_class::number}, {"PTYPE#", value_class::string},
+    {"PSCAL#", value_class::number}, {"PZERO#", value_class::number},
 });
 
 template <std::size_t N> bool contains(const std::array<std::string_view, N>& names, std::string_view name) noexcept

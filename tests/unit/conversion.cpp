@@ -515,6 +515,14 @@ TEST(conversion, blank_of_integer_data_under_each_policy)
     (void)read(true, conversion(numeric_type::float64, blank_policy::mask), in.data(), 1,
                reinterpret_cast<std::byte*>(floats.data()), mask.data(), 1);
     EXPECT_EQ(mask[0], 1U);
+
+    // No undefined value: BLANK converted as any stored value, into every type.
+    (void)read(true, conversion(numeric_type::float32, blank_policy::ignore), in.data(), 1,
+               reinterpret_cast<std::byte*>(floats.data()), nullptr, 2);
+    EXPECT_EQ(floats, (std::array<float, 2>{0.0F, 32775.0F}));
+    (void)read(true, conversion(numeric_type::uint16, blank_policy::ignore), in.data(), 1,
+               reinterpret_cast<std::byte*>(integers.data()), nullptr, 2);
+    EXPECT_EQ(integers, (std::array<std::uint16_t, 2>{0, 32775}));
 }
 
 TEST(conversion, a_mask_without_undefined_values_is_all_zeros)
@@ -568,6 +576,15 @@ TEST(conversion, nan_of_floating_point_data_under_each_policy)
                reinterpret_cast<std::byte*>(&integer), &mask, 1);
     EXPECT_EQ(integer, 0);
     EXPECT_EQ(mask, 1U);
+
+    // A NaN stays one when no value is undefined: in a floating-point destination, refused in an integer one.
+    (void)read(true, conversion(numeric_type::float32, blank_policy::ignore), in.data(), 1,
+               reinterpret_cast<std::byte*>(&same), nullptr, 1);
+    EXPECT_EQ(std::bit_cast<std::uint32_t>(same), 0x7FC0'1234U);
+    EXPECT_TRUE(throws<invalid_data_error>(errc::undefined_value, [&] {
+        (void)read(true, conversion(numeric_type::int32, blank_policy::ignore), in.data(), 1,
+                   reinterpret_cast<std::byte*>(&integer), nullptr, 1);
+    }));
 }
 
 TEST(conversion, a_value_for_undefined_values_must_be_one_of_the_destination_type)

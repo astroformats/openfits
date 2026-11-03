@@ -35,6 +35,16 @@ std::vector<float> sky(std::size_t width, std::size_t height)
     return values;
 }
 
+std::vector<std::uint16_t> unsigned_sky(std::size_t width, std::size_t height)
+{
+    const std::vector<float> values = sky(width, height);
+    std::vector<std::uint16_t> result(values.size());
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        result[i] = static_cast<std::uint16_t>(std::lround(values[i] * 65535.0F));
+    }
+    return result;
+}
+
 } // namespace openfits::bench
 
 int main(int argc, char** argv)
@@ -44,6 +54,8 @@ int main(int argc, char** argv)
         return 1;
     }
     openfits::bench::register_image_benchmarks();
+    openfits::bench::register_table_benchmarks();
+    openfits::bench::register_compression_benchmarks();
     benchmark::RunSpecifiedBenchmarks();
     benchmark::Shutdown();
     openfits::bench::remove_benchmark_files();
