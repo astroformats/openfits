@@ -1,0 +1,11 @@
+0	SIMPLE	bool	T	conforms to FITS standard
+0	BITPIX	int	16	array data type
+0	NAXIS	int	2	number of array dimensions
+0	NAXIS1	int	37	
+0	NAXIS2	int	23	
+0	EXTEND	bool	T	
+0	BSCALE	int	1	
+0	BZERO	int	32768	
+0	OBJECT	str	pattern	the pattern image of the samples
+0	CHECKSUM	str	YAAib92hZA9ha99h	2026-11-02T00:00:00
+0	DATASUM	str	4294901802	2026-11-02T00:00:00

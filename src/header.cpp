@@ -12,12 +12,41 @@
 #include "header/long_string.h"
 #include "header/record.h"
 
+#include <algorithm>
 #include <cmath>
+#include <functional>
+#include <map>
+#include <memory_resource>
+#include <string>
 #include <utility>
 
 namespace openfits {
 
+// The first card of each canonical keyword, for a header of more cards than searched_cards. Its nodes come from an
+// arena of its own, which takes one allocation for the first 32 keywords, where a map takes one for each, and grows by
+// blocks after them.
+struct header::keyword_index
+{
+    // The bytes of a node of the map, its key and its value, as the standard libraries make them, or about.
+    static constexpr std::size_t node_size = 96;
+
+    explicit keyword_index(std::size_t cards) : arena(std::clamp<std::size_t>(cards, 1, 32) * node_size) {}
+
+    // Makes the card at position the first of keyword, unless it has one.
+    void add(std::string_view keyword, std::size_t position)
+    {
+        (void)first.try_emplace(std::pmr::string(keyword, &arena), position);
+    }
+
+    std::pmr::monotonic_buffer_resource arena;
+    std::pmr::map<std::pmr::string, std::size_t, std::less<>> first{&arena};
+};
+
 namespace {
+
+// The cards of a header that a lookup searches in order, which takes less than an index takes to make: the walk of a
+// file reads the header of every unit, most of them short.
+constexpr std::size_t searched_cards = 32;
 
 // The text of a commentary card, bytes 9 to 80 of its record.
 constexpr std::size_t commentary_length = detail::record_length - 8;
@@ -131,9 +160,15 @@ header::header(std::vector<card> cards) : cards_(std::move(cards))
     rebuild_index();
 }
 
-header::header(const header& other)
-    : cards_(other.cards_), index_(other.index_ ? std::make_unique<keyword_index>(*other.index_) : nullptr)
-{}
+header::header(const header& other) : cards_(other.cards_)
+{
+    rebuild_index();
+}
+
+header::header() noexcept = default;
+header::header(header&& other) noexcept = default;
+header& header::operator=(header&& other) noexcept = default;
+header::~header() = default;
 
 header& header::operator=(const header& other)
 {
@@ -158,11 +193,25 @@ bool header::contains(std::string_view keyword) const
 
 std::optional<std::size_t> header::index_of(std::string_view keyword) const
 {
-    if (!index_) {
+    if (cards_.empty()) {
         return std::nullopt;
     }
-    const auto found = index_->find(detail::canonical_keyword(keyword));
-    if (found == index_->end()) {
+    // A name of the standard is canonical as it is, which saves a copy at each lookup.
+    std::string name;
+    if (!detail::is_standard_keyword(keyword)) {
+        name = detail::canonical_keyword(keyword);
+        keyword = name;
+    }
+    if (!index_) {
+        for (std::size_t i = 0; i < cards_.size(); ++i) {
+            if (cards_[i].keyword() == keyword) {
+                return i;
+            }
+        }
+        return std::nullopt;
+    }
+    const auto found = index_->first.find(keyword);
+    if (found == index_->first.end()) {
         return std::nullopt;
     }
     return found->second;
@@ -378,26 +427,29 @@ void header::set(std::string_view keyword, card_value value, std::string_view co
 void header::append(card value)
 {
     const std::size_t fill = free_cards();
-    keyword_index& keywords = index();
     if (fill == 0 || is_blank(value)) {
-        keywords.try_emplace(std::string(value.keyword()), cards_.size());
         cards_.push_back(std::move(value));
+        if (index_) {
+            index_->add(cards_.back().keyword(), cards_.size() - 1);
+        } else if (cards_.size() > searched_cards) {
+            rebuild_index();
+        }
         return;
     }
     const std::size_t position = cards_.size() - fill;
     cards_[position] = std::move(value);
     const std::string_view name = cards_[position].keyword();
-    if (!name.empty()) {
+    if (index_ && !name.empty()) {
         // The blank card replaced may be the first card of the blank keyword, which the index names.
-        const auto blank = keywords.find(std::string_view{});
-        if (blank != keywords.end() && blank->second == position) {
+        const auto blank = index_->first.find(std::string_view{});
+        if (blank != index_->first.end() && blank->second == position) {
             if (fill > 1) {
                 blank->second = position + 1;
             } else {
-                keywords.erase(blank);
+                index_->first.erase(blank);
             }
         }
-        keywords.try_emplace(std::string(name), position);
+        index_->add(name, position);
     }
 }
 
@@ -506,19 +558,15 @@ std::string header::to_string(bool commentary) const
     return result;
 }
 
-header::keyword_index& header::index()
-{
-    if (!index_) {
-        index_ = std::make_unique<keyword_index>();
-    }
-    return *index_;
-}
-
 void header::rebuild_index()
 {
-    auto keywords = std::make_unique<keyword_index>();
+    if (cards_.size() <= searched_cards) {
+        index_.reset();
+        return;
+    }
+    auto keywords = std::make_unique<keyword_index>(cards_.size());
     for (std::size_t i = 0; i < cards_.size(); ++i) {
-        keywords->try_emplace(std::string(cards_[i].keyword()), i);
+        keywords->add(cards_[i].keyword(), i);
     }
     index_ = std::move(keywords);
 }
@@ -526,6 +574,31 @@ void header::rebuild_index()
 bool is_structural(std::string_view keyword)
 {
     return detail::is_structural_keyword(detail::canonical_keyword(keyword));
+}
+
+bool is_standard_keyword(std::string_view keyword) noexcept
+{
+    return detail::is_standard_keyword(keyword);
+}
+
+std::size_t header::continuation_count(std::size_t index) const
+{
+    (void)at(index);
+    return detail::continuation_length(cards_, index);
+}
+
+std::optional<std::string> header::string_at(std::size_t index) const
+{
+    if (at(index).value().kind() != value_kind::string) {
+        return std::nullopt;
+    }
+    return detail::joined_string(cards_, index);
+}
+
+std::string header::comment_at(std::size_t index) const
+{
+    (void)at(index);
+    return detail::joined_comment(cards_, index);
 }
 
 header without_structural(const header& cards)

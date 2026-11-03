@@ -1,0 +1,41 @@
+0	SIMPLE	bool	T	file does conform to FITS standard
+0	BITPIX	int	16	number of bits per data pixel
+0	NAXIS	int	0	number of data axes
+0	EXTEND	bool	T	FITS dataset may contain extensions
+0	COMMENT	commentary	  FITS (Flexible Image Transport System) format is defined in 'Astronomy	
+0	COMMENT	commentary	  and Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H	
+1	XTENSION	str	BINTABLE	binary table extension
+1	BITPIX	int	8	8-bit bytes
+1	NAXIS	int	2	2-dimensional binary table
+1	NAXIS1	int	24	width of table in bytes
+1	NAXIS2	int	1	number of rows in table
+1	PCOUNT	int	728	size of special data area
+1	GCOUNT	int	1	one data group (required keyword)
+1	TFIELDS	int	3	number of fields in each row
+1	TTYPE1	str	COMPRESSED_DATA	label for field   1
+1	TFORM1	str	1PB(728)	data format of field: variable length array
+1	TTYPE2	str	ZSCALE	label for field   2
+1	TFORM2	str	1D	data format of field: 8-byte DOUBLE
+1	TTYPE3	str	ZZERO	label for field   3
+1	TFORM3	str	1D	data format of field: 8-byte DOUBLE
+1	ZIMAGE	bool	T	extension contains compressed image
+1	ZTILE1	int	37	size of tiles to be compressed
+1	ZTILE2	int	23	size of tiles to be compressed
+1	ZCMPTYPE	str	HCOMPRESS_1	compression algorithm
+1	ZNAME1	str	SCALE	HCOMPRESS scale factor
+1	ZVAL1	float	0.0	HCOMPRESS scale factor
+1	ZNAME2	str	SMOOTH	HCOMPRESS smooth option
+1	ZVAL2	int	0	HCOMPRESS smooth option
+1	EXTNAME	str	COMPRESSED_IMAGE	
+1	ZSIMPLE	bool	T	conforms to FITS standard
+1	ZBITPIX	int	-32	array data type
+1	ZNAXIS	int	2	number of array dimensions
+1	ZNAXIS1	int	37	
+1	ZNAXIS2	int	23	
+1	ZEXTEND	bool	T	
+1	OBJECT	str	pattern	the pattern as 32-bit floating point
+1	ZQUANTIZ	str	SUBTRACTIVE_DITHER_1	Pixel Quantization Algorithm
+1	HISTORY	commentary	Image was compressed by CFITSIO using scaled integer quantization:	
+1	HISTORY	commentary	  q = -0.000100 / quantized level scaling parameter	
+1	HISTORY	commentary	'SUBTRACTIVE_DITHER_1' / Pixel Quantization Algorithm	
+1	ZDITHER0	int	1	dithering offset when quantizing floats

@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -230,6 +231,23 @@ TEST(header, joins_a_long_string)
     EXPECT_EQ(cards.value<std::string>("AMP"), "x&");
 }
 
+TEST(header, joins_the_long_string_of_the_card_at_an_index)
+{
+    // A keyword that a header holds twice: each card joined with its own CONTINUE records.
+    const header cards = parsed({"NOTE    = 'first&' / one", "CONTINUE  'part' / more", "NOTE    = 'second&'",
+                                 "CONTINUE  'a&'", "CONTINUE  'b'", "VALUE   = 3"});
+    EXPECT_EQ(cards.string_at(0), "firstpart");
+    EXPECT_EQ(cards.comment_at(0), "one more");
+    EXPECT_EQ(cards.continuation_count(0), 1U);
+    EXPECT_EQ(cards.string_at(2), "secondab");
+    EXPECT_EQ(cards.continuation_count(2), 2U);
+    EXPECT_EQ(cards.string_at(5), std::nullopt);
+    EXPECT_EQ(cards.continuation_count(5), 0U);
+    EXPECT_TRUE(throws<openfits::usage_error>(errc::invalid_argument, [&] { (void)cards.string_at(6); }));
+    EXPECT_TRUE(throws<openfits::usage_error>(errc::invalid_argument, [&] { (void)cards.comment_at(6); }));
+    EXPECT_TRUE(throws<openfits::usage_error>(errc::invalid_argument, [&] { (void)cards.continuation_count(6); }));
+}
+
 TEST(header, sets_a_new_keyword_after_the_last_card_that_is_not_fill)
 {
     header cards = parsed({"SIMPLE  =                    T", "", ""});
@@ -286,6 +304,40 @@ TEST(header, appends_blank_cards_as_fill)
     EXPECT_EQ(cards[1].comment(), "not fill");
     EXPECT_EQ(cards.index_of(""), 1U);
     EXPECT_EQ(cards.free_cards(), 1U);
+}
+
+// A lookup gives the first card of a keyword whether the header is short and searched in order or long and indexed: at
+// every size across the bound between the two, as cards are appended, blank ones taken as fill, and cards erased.
+TEST(header, finds_the_first_card_of_a_keyword_at_every_size)
+{
+    header cards;
+    const auto check = [&cards] {
+        for (const std::string_view keyword : {"KEY0", "KEY3", "KEY7", "", "ABSENT"}) {
+            std::optional<std::size_t> first;
+            for (std::size_t i = 0; i < cards.size() && !first; ++i) {
+                if (cards[i].keyword() == keyword) {
+                    first = i;
+                }
+            }
+            EXPECT_EQ(cards.index_of(keyword), first) << '"' << keyword << "\" in " << cards.size() << " cards";
+        }
+    };
+    for (int i = 0; i < 60; ++i) {
+        cards.append(card("KEY" + std::to_string(i % 8), i));
+        if (i % 7 == 0) {
+            cards.append(card());
+            cards.append(card());
+        }
+        check();
+    }
+    ASSERT_GT(cards.size(), 40U);
+    while (cards.erase("KEY3")) {
+        check();
+    }
+    while (!cards.empty()) {
+        cards.erase_at(cards.size() / 2);
+        check();
+    }
 }
 
 TEST(header, inserts_and_erases_cards)
@@ -418,16 +470,28 @@ TEST(header, leaves_out_its_structural_cards)
 TEST(header, names_the_structural_keywords)
 {
     for (const char* keyword :
-         {"SIMPLE", "bitpix",  "NAXIS",    "NAXIS3",   "NAXIS999", "EXTEND",   "XTENSION", "PCOUNT",   "GCOUNT",
-          "GROUPS", "TFIELDS", "TFORM1",   "TBCOL12",  "THEAP",    "BSCALE",   "BZERO",    "BLANK",    "TSCAL3",
-          "TZERO3", "TNULL3",  "TDIM3",    "ZIMAGE",   "ZCMPTYPE", "ZBITPIX",  "ZNAXIS2",  "ZTILE1",   "ZNAME1",
-          "ZVAL1",  "ZSCALE",  "ZZERO",    "ZBLANK",   "ZQUANTIZ", "ZDITHER0", "ZHECKSUM", "ZDATASUM", "ZTABLE",
-          "ZFORM2", "ZCTYP2",  "ZTILELEN", "CHECKSUM", "DATASUM",  "CONTINUE", "END"}) {
+         {"SIMPLE",   "bitpix",   "NAXIS",    "NAXIS3", "NAXIS999", "EXTEND",  "XTENSION", "PCOUNT",
+          "GCOUNT",   "GROUPS",   "TFIELDS",  "TFORM1", "TBCOL12",  "THEAP",   "BSCALE",   "BZERO",
+          "BLANK",    "TSCAL3",   "TZERO3",   "TNULL3", "TDIM3",    "ZIMAGE",  "ZCMPTYPE", "ZBITPIX",
+          "ZNAXIS2",  "ZTILE1",   "ZNAME1",   "ZVAL1",  "ZSCALE",   "ZZERO",   "ZBLANK",   "ZQUANTIZ",
+          "ZDITHER0", "ZHECKSUM", "ZDATASUM", "ZTABLE", "ZFORM2",   "ZCTYP2",  "ZTILELEN", "CHECKSUM",
+          "DATASUM",  "CONTINUE", "END",      "TTYPE1", "TUNIT9",   "TDISP999"}) {
         EXPECT_TRUE(openfits::is_structural(keyword)) << keyword;
     }
-    for (const char* keyword : {"OBJECT", "NAXIS0", "NAXIS01", "NAXIS1000", "TTYPE1", "EXTNAME", "DATE", "COMMENT",
-                                "HISTORY", "", "BUNIT", "ESO DET DIT"}) {
+    for (const char* keyword : {"OBJECT", "NAXIS0", "NAXIS01", "NAXIS1000", "TTYPE0", "TDMIN1", "EXTNAME", "DATE",
+                                "COMMENT", "HISTORY", "", "BUNIT", "PTYPE1", "ESO DET DIT"}) {
         EXPECT_FALSE(openfits::is_structural(keyword)) << keyword;
+    }
+}
+
+TEST(header, names_the_keywords_of_standard_form)
+{
+    // Standard §4.1.2.1: one to eight upper-case letters, digits, hyphens and underscores, as given.
+    for (const char* keyword : {"NAXIS1", "DATE-OBS", "A_B", "X", "12345678"}) {
+        EXPECT_TRUE(openfits::is_standard_keyword(keyword)) << keyword;
+    }
+    for (const char* keyword : {"naxis1", "ESO DET", "", "TOOLONGNAME", "A.B", "HIERARCH"}) {
+        EXPECT_EQ(openfits::is_standard_keyword(keyword), std::string_view(keyword) == "HIERARCH") << keyword;
     }
 }
 

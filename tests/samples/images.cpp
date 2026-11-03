@@ -115,7 +115,7 @@ template <typename T> void check_values(const sample_unit& expected, const std::
         switch (expected.content) {
         case image_content::pattern:
             if constexpr (std::floating_point<T>) {
-                const double tolerance = std::same_as<T, float> ? 1e-6 : 1e-12;
+                const double tolerance = expected.tolerance.value_or(std::same_as<T, float> ? 1e-6 : 1e-12);
                 EXPECT_NEAR(as<double>(value), real_pattern(e), tolerance) << "element " << e;
             } else {
                 const T exact = integer_pattern<T>(e);

@@ -10,9 +10,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <limits>
-#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -60,7 +58,7 @@ class OPENFITS_API header
 public:
     using const_iterator = std::vector<card>::const_iterator;
 
-    header() = default;
+    header() noexcept;
 
     /// A header of the given cards, in their order.
     explicit header(std::vector<card> cards);
@@ -68,9 +66,9 @@ public:
     header(const header& other);
     /// Copies other. When the copy throws, this header is left as it was.
     header& operator=(const header& other);
-    header(header&& other) noexcept = default;
-    header& operator=(header&& other) noexcept = default;
-    ~header() = default;
+    header(header&& other) noexcept;
+    header& operator=(header&& other) noexcept;
+    ~header();
 
     /// The number of cards.
     [[nodiscard]] std::size_t size() const noexcept
@@ -222,6 +220,22 @@ public:
     /// @throws validation_error for a card that no record can hold.
     [[nodiscard]] std::string to_string(bool commentary = true) const;
 
+    /// The number of CONTINUE records after the card at index that continue its string (standard §4.2.1.2): 0 for a
+    /// card whose string does not end with an ampersand, or that holds no string.
+    /// @throws usage_error (errc::invalid_argument) when index is not below size().
+    [[nodiscard]] std::size_t continuation_count(std::size_t index) const;
+
+    /// The string of the card at index with those of the CONTINUE records that continue it, as value() joins the string
+    /// of the first card of a keyword, for a keyword that a header holds more than once; nothing when the card holds no
+    /// string.
+    /// @throws usage_error (errc::invalid_argument) when index is not below size().
+    [[nodiscard]] std::optional<std::string> string_at(std::size_t index) const;
+
+    /// The comment of the card at index with those of the CONTINUE records that continue its string, as comment() joins
+    /// that of the first card of a keyword.
+    /// @throws usage_error (errc::invalid_argument) when index is not below size().
+    [[nodiscard]] std::string comment_at(std::size_t index) const;
+
     friend bool operator==(const header& left, const header& right)
     {
         return left.cards_ == right.cards_;
@@ -278,15 +292,14 @@ private:
     [[noreturn]] static void throw_not_found(std::string_view keyword);
     [[noreturn]] static void throw_out_of_range(std::string_view keyword, std::string_view type);
 
-    using keyword_index = std::map<std::string, std::size_t, std::less<>>;
-
-    // The index of the first card of each canonical keyword, made for the first card added.
-    keyword_index& index();
+    // The index of the first card of each canonical keyword, made for a header of more cards than a search in order
+    // takes as quickly, and kept as cards are added.
+    struct keyword_index;
     void rebuild_index();
 
     std::vector<card> cards_{};
     // On the heap, so that a header moves without allocating, which the map of some standard libraries does; empty
-    // for a header without cards.
+    // for a header that is searched in order.
     std::unique_ptr<keyword_index> index_{};
 };
 
@@ -295,10 +308,15 @@ private:
 #endif
 
 /// True for the keywords that the library writes from the model of a unit, and refuses in a header given to the
-/// writer: SIMPLE, BITPIX, NAXIS and NAXISn, EXTEND, XTENSION, PCOUNT, GCOUNT, GROUPS, TFIELDS, TFORMn, TBCOLn, THEAP,
-/// BSCALE, BZERO, BLANK, TSCALn, TZEROn, TNULLn, TDIMn, the keywords of tiled compression (standard §10), CHECKSUM,
-/// DATASUM, CONTINUE and END. The keyword is taken in any case.
+/// writer: SIMPLE, BITPIX, NAXIS and NAXISn, EXTEND, XTENSION, PCOUNT, GCOUNT, GROUPS, TFIELDS, THEAP, BSCALE, BZERO,
+/// BLANK, the keywords of the columns of tables that the models of columns give (TTYPEn, TFORMn, TBCOLn, TUNITn,
+/// TSCALn, TZEROn, TNULLn, TDISPn and TDIMn), the keywords of tiled compression (standard §10), CHECKSUM, DATASUM,
+/// CONTINUE and END. The keyword is taken in any case.
 [[nodiscard]] OPENFITS_API bool is_structural(std::string_view keyword);
+
+/// True for a keyword name of standard §4.1.2.1, as it is given: one to eight characters, each an upper-case letter, a
+/// digit, a hyphen or an underscore. Any other name is written with the HIERARCH convention, on request.
+[[nodiscard]] OPENFITS_API bool is_standard_keyword(std::string_view keyword) noexcept;
 
 /// The cards of a header but the structural ones, which the writer makes from the model of a unit: what a header read
 /// from a file gives to the header of a new unit. The CONTINUE records that continue a string go with its card, and an

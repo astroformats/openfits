@@ -1,0 +1,71 @@
+0	SIMPLE	bool	T	conforms to FITS standard
+0	BITPIX	int	8	array data type
+0	NAXIS	int	0	number of array dimensions
+0	EXTEND	bool	T	
+1	XTENSION	str	BINTABLE	binary table extension
+1	BITPIX	int	8	array data type
+1	NAXIS	int	2	number of array dimensions
+1	NAXIS1	int	141	length of dimension 1
+1	NAXIS2	int	5	length of dimension 2
+1	PCOUNT	int	209	size of special data area
+1	GCOUNT	int	1	number of groups
+1	TFIELDS	int	23	number of table fields
+1	TTYPE1	str	FLAG	
+1	TFORM1	str	L	
+1	TTYPE2	str	BITS	
+1	TFORM2	str	13X	
+1	TTYPE3	str	UBYTE	
+1	TFORM3	str	B	
+1	TTYPE4	str	SBYTE	
+1	TFORM4	str	B	
+1	TZERO4	int	-128	
+1	TTYPE5	str	SHORT	
+1	TFORM5	str	I	
+1	TTYPE6	str	USHORT	
+1	TFORM6	str	I	
+1	TZERO6	int	32768	
+1	TTYPE7	str	INT	
+1	TFORM7	str	J	
+1	TTYPE8	str	UINT	
+1	TFORM8	str	J	
+1	TZERO8	int	2147483648	
+1	TTYPE9	str	LONG	
+1	TFORM9	str	K	
+1	TTYPE10	str	ULONG	
+1	TFORM10	str	K	
+1	TZERO10	int	9223372036854775808	
+1	TTYPE11	str	FLOAT	
+1	TFORM11	str	E	
+1	TTYPE12	str	DOUBLE	
+1	TFORM12	str	D	
+1	TUNIT12	str	deg	
+1	TDISP12	str	F12.5	
+1	TTYPE13	str	NAME	
+1	TFORM13	str	8A	
+1	TTYPE14	str	CPLX	
+1	TFORM14	str	C	
+1	TTYPE15	str	DCPLX	
+1	TFORM15	str	M	
+1	TTYPE16	str	MATRIX	
+1	TFORM16	str	6I	
+1	TDIM16	str	(3,2)	
+1	TTYPE17	str	EMPTY	
+1	TFORM17	str	0J	
+1	TTYPE18	str	SCALED	
+1	TFORM18	str	J	
+1	TTYPE19	str	NULLED	
+1	TFORM19	str	J	
+1	TNULL19	int	-999	
+1	TTYPE20	str	VLA_P	
+1	TFORM20	str	PJ(4)	
+1	TTYPE21	str	VLA_Q	
+1	TFORM21	str	QD(2)	
+1	TTYPE22	str	WORDS	
+1	TFORM22	str	12A4	
+1	TTYPE23	str	NOTES	
+1	TFORM23	str	PA(10)	
+1	THEAP	int	809	heap after a gap
+1	TSCAL18	float	0.25	
+1	TZERO18	float	100.0	
+1	EXTNAME	str	CATALOG	extension name
+1	OBJECT	str	every TFORMn type	the sample D2

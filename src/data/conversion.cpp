@@ -289,7 +289,7 @@ read_conversion make_read_conversion(bitpix from, numeric_type to, const scaling
                                .to = to,
                                .scale = values.scale,
                                .zero = values.zero,
-                               .blank = integer_data ? blank : std::nullopt,
+                               .blank = integer_data && policy != blank_policy::ignore ? blank : std::nullopt,
                                .policy = policy,
                                .blank_value = blank_value,
                                .overflow = overflow,
@@ -341,7 +341,7 @@ read_conversion make_read_conversion(bitpix from, numeric_type to, const scaling
         const bool keeps = to == numeric_type::float64 || (to == numeric_type::float32 && from == bitpix::float32 &&
                                                            conversion.arithmetic == arithmetic::identity);
         conversion.checks_range = !keeps;
-        conversion.checks_undefined = integer_target || policy != blank_policy::nan;
+        conversion.checks_undefined = integer_target || (policy != blank_policy::nan && policy != blank_policy::ignore);
     }
     return conversion;
 }

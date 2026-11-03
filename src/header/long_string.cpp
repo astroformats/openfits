@@ -82,7 +82,7 @@ std::vector<std::string> long_string_records(std::string_view keyword, std::stri
 {
     const std::string name = canonical_hierarch_name(keyword);
     const error_context where{.hdu = options.hdu, .keyword = name};
-    if (is_reserved_keyword(name)) {
+    if (is_reserved_keyword(name) && (!options.continue_reserved || is_structural_keyword(name))) {
         throw validation_error(errc::continued_reserved_keyword,
                                "the string of " + quote(name) +
                                    " is longer than a record holds, and CONTINUE must not continue a reserved keyword",

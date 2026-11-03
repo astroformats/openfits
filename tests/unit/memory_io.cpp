@@ -142,6 +142,17 @@ TEST(memory_sink, rewrites_beyond_the_written_bytes_are_usage_errors)
     EXPECT_EQ(text(sink.data()), "0123456789");
 }
 
+TEST(memory_sink, reserves_room_for_the_bytes_to_come)
+{
+    memory_sink sink;
+    sink.reserve(1000);
+    sink.write(bytes("abc"));
+    EXPECT_EQ(text(std::vector<std::byte>(sink.data().begin(), sink.data().end())), "abc");
+    EXPECT_GE(sink.release().capacity(), 1000U);
+    EXPECT_TRUE(throws<openfits::limit_error>(openfits::errc::allocation_too_large,
+                                              [&] { sink.reserve(std::numeric_limits<std::uint64_t>::max()); }));
+}
+
 TEST(memory_sink, release_moves_the_bytes_out)
 {
     memory_sink sink;

@@ -6,11 +6,13 @@
 #include <openfits/card.h>
 #include <openfits/error.h>
 
+#include "compress/image_tiles.h"
 #include "core/ascii.h"
 #include "core/quote.h"
 #include "header/keywords.h"
 #include "header/long_string.h"
 #include "header/record.h"
+#include "table/table_description.h"
 
 #include <algorithm>
 #include <array>
@@ -79,6 +81,7 @@ public:
         }
         read_name(result);
         check_reserved(result.kind, bitpix);
+        check_contents(result.kind);
         return result;
     }
 
@@ -374,6 +377,29 @@ private:
         log_.error(errc::invalid_structure, "the size of the data that the header gives does not fit in 64 bits",
                    about("NAXIS"));
         return std::nullopt;
+    }
+
+    // The keywords of the columns of tables (standard §7.2, §7.3) and of the parameters of random groups (standard §6).
+    void check_contents(hdu_kind kind)
+    {
+        switch (kind) {
+        case hdu_kind::table:
+        case hdu_kind::bintable:
+        case hdu_kind::compressed_image:
+            (void)analyze_table(cards_, kind, index_, header_offset_, log_);
+            analyze_compressed_image(cards_, index_, header_offset_, log_);
+            break;
+        case hdu_kind::compressed_table:
+            (void)analyze_table(cards_, kind, index_, header_offset_, log_);
+            break;
+        case hdu_kind::random_groups:
+            (void)analyze_groups(cards_, header_offset_, log_);
+            break;
+        case hdu_kind::primary:
+        case hdu_kind::image:
+        case hdu_kind::unknown:
+            break;
+        }
     }
 
     // EXTNAME, or else HDUNAME, and EXTVER (standard §4.4.2.6).

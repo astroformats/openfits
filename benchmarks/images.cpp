@@ -8,7 +8,6 @@
 #include <benchmark/benchmark.h>
 
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -40,12 +39,13 @@ constexpr std::array<frame_size, 2> sizes{
     {{.name = "small", .width = 1024, .height = 1024}, {.name = "frame", .width = 6000, .height = 4000}}};
 
 // The images of the benchmarks: 16-bit values of the unsigned convention, floats, and 16-bit values scaled by BSCALE
-// 0.01 and BZERO 100.
+// 0.01 and BZERO 100; and the first with DATASUM and CHECKSUM.
 enum class image_kind
 {
     u16,
     f32,
     i16_scaled,
+    u16_checked,
 };
 
 // The directory of the files, made in the temporary directory of the system when the first file is written.
@@ -64,16 +64,6 @@ std::string utf8(const std::filesystem::path& path)
 {
     const std::u8string text = path.u8string();
     return {text.begin(), text.end()};
-}
-
-std::vector<std::uint16_t> unsigned_sky(const frame_size& size)
-{
-    const std::vector<float> values = sky(size.width, size.height);
-    std::vector<std::uint16_t> result(values.size());
-    for (std::size_t i = 0; i < values.size(); ++i) {
-        result[i] = static_cast<std::uint16_t>(std::lround(values[i] * 65535.0F));
-    }
-    return result;
 }
 
 // The values of the scaled image: the sky times 100, which BSCALE 0.01 and BZERO 100 store in 16 bits.
@@ -111,11 +101,11 @@ const std::string& file_of(image_kind kind, const frame_size& size)
     if (found != files.end()) {
         return found->second;
     }
-    std::string path = utf8(directory() / name);
+    std::string path = file_path(name);
     writer output;
     switch (kind) {
     case image_kind::u16: {
-        const std::vector<std::uint16_t> values = unsigned_sky(size);
+        const std::vector<std::uint16_t> values = unsigned_sky(size.width, size.height);
         (void)output.add_image(plain_image(size), std::span<const std::uint16_t>(values));
         output.save(path);
         break;
@@ -132,18 +122,39 @@ const std::string& file_of(image_kind kind, const frame_size& size)
         output.save(path);
         break;
     }
+    case image_kind::u16_checked: {
+        const std::vector<std::uint16_t> values = unsigned_sky(size.width, size.height);
+        (void)output.add_image(plain_image(size), std::span<const std::uint16_t>(values));
+        output.save(path, {.checksums = true});
+        break;
+    }
     }
     return files.emplace(name, std::move(path)).first->second;
+}
+
+// The file of an empty primary HDU and a thousand IMAGE extensions of 10 x 10 bytes, each with a keyword of its own.
+const std::string& thousand_units()
+{
+    static const std::string path = [] {
+        std::string name = file_path("thousand-units.fits");
+        static const std::vector<std::uint8_t> values(100, 7);
+        writer output;
+        (void)output.add_header({});
+        for (int i = 0; i < 1000; ++i) {
+            image_info info;
+            info.geometry.axes = {10, 10};
+            info.header.set("EXTNAME", "UNIT" + std::to_string(i));
+            (void)output.add_image(info, std::span<const std::uint8_t>(values));
+        }
+        output.save(name);
+        return name;
+    }();
+    return path;
 }
 
 std::size_t stored_size(image_kind kind) noexcept
 {
     return kind == image_kind::f32 ? 4 : 2;
-}
-
-void count_bytes(benchmark::State& state, std::uint64_t size)
-{
-    state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(size));
 }
 
 // A read of the whole image into memory of the application, as values of T: the bytes counted are those stored.
@@ -174,37 +185,45 @@ void read_region(benchmark::State& state, frame_size size)
     count_bytes(state, side * side * 2);
 }
 
-// A sink that keeps no bytes, so that a write measures the conversion and the header, not the growth of a buffer.
-class discarding_sink final : public output_sink
-{
-public:
-    void write(std::span<const std::byte> data) override
-    {
-        benchmark::DoNotOptimize(data.data());
-        position_ += data.size();
-    }
-
-    std::uint64_t position() const override
-    {
-        return position_;
-    }
-
-private:
-    std::uint64_t position_ = 0;
-};
-
-template <typename T> void write_image(benchmark::State& state, image_info info, std::vector<T> values)
+template <typename T>
+void write_image(benchmark::State& state, image_info info, std::vector<T> values, const write_options& options = {})
 {
     writer output;
     (void)output.add_image(std::move(info), std::span<const T>(values));
     while (state.KeepRunning()) {
         discarding_sink sink;
-        output.save(sink);
+        output.save(sink, options);
     }
     count_bytes(state, values.size() * sizeof(T));
 }
 
+// The checksums of a unit verified alone: the whole unit read and summed.
+void verify_unit(benchmark::State& state, frame_size size)
+{
+    const reader file(file_of(image_kind::u16_checked, size));
+    while (state.KeepRunning()) {
+        benchmark::DoNotOptimize(file.verify(0));
+    }
+    count_bytes(state, size.pixels() * 2);
+}
+
+// The walk of every unit of a file of a thousand units, from its open.
+void walk_units(benchmark::State& state)
+{
+    const std::string& path = thousand_units();
+    while (state.KeepRunning()) {
+        const reader file(path);
+        benchmark::DoNotOptimize(file.hdu_count());
+    }
+    state.SetItemsProcessed(state.iterations() * 1001);
+}
+
 } // namespace
+
+std::string file_path(std::string_view name)
+{
+    return utf8(directory() / std::filesystem::path(std::u8string(name.begin(), name.end())));
+}
 
 void register_image_benchmarks()
 {
@@ -221,7 +240,7 @@ void register_image_benchmarks()
             ->Unit(benchmark::kMillisecond);
         benchmark::RegisterBenchmark("read/u16/region_512" + suffix, read_region, size)->Unit(benchmark::kMicrosecond);
         benchmark::RegisterBenchmark("write/u16" + suffix, [size](benchmark::State& state) {
-            write_image(state, plain_image(size), unsigned_sky(size));
+            write_image(state, plain_image(size), unsigned_sky(size.width, size.height));
         })->Unit(benchmark::kMillisecond);
         benchmark::RegisterBenchmark("write/f32" + suffix, [size](benchmark::State& state) {
             write_image(state, plain_image(size), sky(size.width, size.height));
@@ -229,7 +248,15 @@ void register_image_benchmarks()
         benchmark::RegisterBenchmark("write/f32_as_i16_scaled" + suffix, [size](benchmark::State& state) {
             write_image(state, scaled_image(size), physical_sky(size));
         })->Unit(benchmark::kMillisecond);
+        benchmark::RegisterBenchmark("verify/u16" + suffix, verify_unit, size)->Unit(benchmark::kMillisecond);
+        benchmark::RegisterBenchmark("read/u16/verified" + suffix, read_image<std::uint16_t>, image_kind::u16_checked,
+                                     size)
+            ->Unit(benchmark::kMillisecond);
+        benchmark::RegisterBenchmark("write/u16/checksums" + suffix, [size](benchmark::State& state) {
+            write_image(state, plain_image(size), unsigned_sky(size.width, size.height), {.checksums = true});
+        })->Unit(benchmark::kMillisecond);
     }
+    benchmark::RegisterBenchmark("walk/thousand_units", walk_units)->Unit(benchmark::kMillisecond);
 }
 
 void remove_benchmark_files()

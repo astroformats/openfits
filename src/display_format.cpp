@@ -207,7 +207,7 @@ std::string integer_field(const display_format& format, std::uint64_t magnitude,
 // fraction.
 std::string fixed_field(double value, std::uint32_t width, std::uint32_t places)
 {
-    const detail::fixed_digits digits = detail::round_fixed(detail::exact_digits(value), places);
+    const detail::fixed_digits digits = detail::round_fixed(detail::fixed_rounding_digits(value, places), places);
     const std::string sign = std::signbit(value) ? "-" : "";
     std::string text = sign + (digits.integer.empty() ? "0" : digits.integer) + '.' + digits.fraction;
     if (text.size() > width && digits.integer.empty()) {
@@ -246,7 +246,8 @@ std::string exponential_field(double value, const display_format& format)
     const std::uint32_t places = format.digits.value_or(0);
     const std::uint32_t exponent_digits = format.exponent_digits.value_or(2);
     const char letter = format.code == display_code::double_exponential ? 'D' : 'E';
-    const detail::decimal_digits exact = detail::exact_digits(value);
+    // The roundings below keep at most places + 3 digits, those of the engineering code.
+    const detail::decimal_digits exact = detail::rounding_digits(value, std::size_t{places} + 3);
 
     std::string mantissa = std::signbit(value) ? "-" : "";
     std::int64_t exponent = 0;
@@ -308,7 +309,7 @@ std::string general_field(double value, const display_format& format)
 {
     const std::uint32_t places = format.digits.value_or(1);
     const std::uint32_t spaces = format.exponent_digits.value_or(2) + 2;
-    const detail::decimal_digits exact = detail::exact_digits(value);
+    const detail::decimal_digits exact = detail::rounding_digits(value, places);
     std::uint32_t fraction = places - 1;
     if (!exact.digits.empty()) {
         const std::int64_t before = detail::round_significant(exact, places).exponent;

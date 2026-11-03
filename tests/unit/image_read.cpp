@@ -46,7 +46,6 @@ using openfits::pixel_read_options;
 using openfits::reader;
 using openfits::region;
 using openfits::scaling_policy;
-using openfits::unsupported_error;
 using openfits::usage_error;
 using openfits::test::big_endian;
 using openfits::test::card_record;
@@ -192,7 +191,8 @@ TEST(image_read, units_of_other_kinds_hold_no_image)
     const reader input = open(file);
     EXPECT_TRUE(throws<usage_error>(errc::not_an_image, [&] { (void)input.image(1); }));
     EXPECT_TRUE(throws<usage_error>(errc::not_an_image, [&] { (void)input.image(2); }));
-    EXPECT_TRUE(throws<unsupported_error>(errc::unsupported_compression, [&] { (void)input.image(3); }));
+    // A compressed image is an image, and this one, without the keywords of standard §10.1.1, describes none.
+    EXPECT_TRUE(throws<invalid_data_error>(errc::invalid_compression, [&] { (void)input.image(3); }));
     EXPECT_TRUE(throws<usage_error>(errc::not_an_image, [&] { (void)input.read_pixels<std::uint8_t>(1); }));
 
     const fixture groups =

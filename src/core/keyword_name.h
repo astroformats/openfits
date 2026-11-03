@@ -36,8 +36,9 @@ namespace openfits::detail {
 [[nodiscard]] bool has_wildcards(std::string_view pattern) noexcept;
 
 /// True when the keyword name matches pattern, in which ? matches one character, * any run of characters, the empty
-/// one included, and # a run of one or more digits, all the digits that follow. Letters match in either case. A
-/// pattern that equals the name matches it, wildcards included.
-[[nodiscard]] bool match_keyword(std::string_view pattern, std::string_view name) noexcept;
+/// one included, and # a run of one or more digits, all the digits that follow. Letters match in either case, or only
+/// in their own with exact_case, as the names of table columns may be compared. A pattern that equals the name matches
+/// it, wildcards included.
+[[nodiscard]] bool match_keyword(std::string_view pattern, std::string_view name, bool exact_case = false) noexcept;
 
 } // namespace openfits::detail

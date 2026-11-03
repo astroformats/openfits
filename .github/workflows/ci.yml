@@ -268,13 +268,35 @@ jobs:
           - name: clang-18 TSan
             preset: linux-clang-tsan
             cxx: clang++-18
+          # The parallel work of oneTBB. vcpkg builds the dependencies with the instrumentation, oneTBB included, so
+          # that ThreadSanitizer sees the synchronization of its scheduler; Clang builds them, as it builds the project.
+          - name: clang-18 TSan with oneTBB
+            preset: linux-clang-tsan-tbb
+            cxx: clang++-18
+            vcpkg: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install the dependencies
+        if: ${{ !matrix.vcpkg }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pkg-config zlib1g-dev libgtest-dev
+
+      - name: Build the dependencies with Clang
+        if: ${{ matrix.vcpkg }}
+        run: |
+          echo "CC=clang-18" >> "$GITHUB_ENV"
+          echo "CXX=clang++-18" >> "$GITHUB_ENV"
+
+      # By name, so that the binary cache holds oneTBB, which the manifest has as a feature.
+      - uses: ./.github/actions/setup-vcpkg
+        if: ${{ matrix.vcpkg }}
+        with:
+          cache-key: linux-tsan
+          triplet: x64-linux-tsan
+          overlay-triplets: cmake/vcpkg
+          packages: gtest tbb zlib
 
       # The randomized address space of the 24.04 kernel is larger than Clang 18's sanitizers support.
       - name: Lower the address-space randomization
@@ -362,8 +384,8 @@ jobs:
           cmake --build "$RUNNER_TEMP/pkg-config"
           "$RUNNER_TEMP/pkg-config/consumer"
 
-  # The files that the tests write, read by others than the library: fitsverify of CFITSIO and astropy, installed here
-  # and never linked. Both checks only report.
+  # The files that the tests write, read by others than the library: fitsverify and funpack of CFITSIO and astropy,
+  # installed here and never linked. The checks only report.
   writer-output:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -373,7 +395,8 @@ jobs:
       - name: Install the dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkg-config zlib1g-dev libgtest-dev fitsverify
+          sudo apt-get install -y --no-install-recommends pkg-config zlib1g-dev libgtest-dev fitsverify \
+            libcfitsio-bin
           pip install astropy==8.0.1
 
       - name: Configure
@@ -404,7 +427,51 @@ jobs:
           echo "::notice::fitsverify passed $((total - failed)) of $total files"
           test "$failed" -eq 0
 
-      # Every unit verified and its data read, the warnings of astropy taken for failures.
+      # Every file with a compressed unit decompressed by funpack, but those that CFITSIO cannot decompress (README,
+      # "Tiled compression"): images of 64-bit integers, table columns NOCOMPRESS, and variable-length arrays of
+      # characters or bits, which crash funpack, fpack's own files too.
+      - name: Decompress the files with funpack
+        continue-on-error: true
+        run: |
+          python3 - "$RUNNER_TEMP/files" <<'EOF'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          from astropy.io import fits
+
+
+          def beyond_cfitsio(header):
+              if header.get('ZIMAGE'):
+                  return header.get('ZBITPIX') == 64
+              columns = range(1, header.get('TFIELDS', 0) + 1)
+              return any(header.get(f'ZCTYP{n}') == 'NOCOMPRESS' or
+                         re.match(r'\d*[PQ][AX]', str(header.get(f'ZFORM{n}', ''))) for n in columns)
+
+
+          failed, skipped, total = 0, 0, 0
+          for path in sorted(Path(sys.argv[1]).glob('*.fits')):
+              with fits.open(path, memmap=False, disable_image_compression=True) as units:
+                  headers = [unit.header for unit in units if unit.header.get('ZIMAGE') or unit.header.get('ZTABLE')]
+              if not headers:
+                  continue
+              total += 1
+              if any(beyond_cfitsio(header) for header in headers):
+                  skipped += 1
+                  continue
+              result = subprocess.run(['funpack', '-S', str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+              if result.returncode != 0:
+                  failed += 1
+                  print(f'::warning::funpack cannot decompress {path.name}: {result.stderr.decode()[:300]}')
+          print(f'::notice::funpack decompressed {total - skipped - failed} of {total - skipped} files, '
+                f'{skipped} beyond CFITSIO')
+          sys.exit(1 if failed else 0)
+          EOF
+
+      # Every unit verified, its checksums too, and its data read, the warnings of astropy taken for failures; but the
+      # compressed images it cannot read: RICE_1 of 8-byte integers, which it has no decoder for, and NOCOMPRESS of
+      # 64-bit integers, which fails in its code.
       - name: Read the files with astropy
         continue-on-error: true
         run: |
@@ -415,13 +482,22 @@ jobs:
 
           from astropy.io import fits
 
+
+          def beyond_astropy(header):
+              return header.get('ZBITPIX') == 64 and header.get('ZCMPTYPE') in ('RICE_1', 'NOCOMPRESS')
+
+
           failed = 0
-          paths = sorted(Path(sys.argv[1]).glob('*.fits'))
+          paths = []
+          for path in sorted(Path(sys.argv[1]).glob('*.fits')):
+              with fits.open(path, memmap=False, disable_image_compression=True) as units:
+                  if not any(unit.header.get('ZIMAGE') and beyond_astropy(unit.header) for unit in units):
+                      paths.append(path)
           for path in paths:
               try:
                   with warnings.catch_warnings():
                       warnings.simplefilter('error')
-                      with fits.open(path, memmap=False) as units:
+                      with fits.open(path, memmap=False, checksum=True) as units:
                           units.verify('exception')
                           for unit in units:
                               _ = unit.data

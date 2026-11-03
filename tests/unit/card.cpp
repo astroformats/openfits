@@ -66,6 +66,32 @@ TEST(card, parse_keeps_the_record_padded_to_80_characters)
     EXPECT_EQ(exposure.value(), card_value(300.0));
 }
 
+TEST(card, a_card_of_a_value_text_keeps_the_text)
+{
+    // The record that the writer would make: a number right-justified in bytes 11 to 30, a string from byte 11.
+    const card exposure = card::with_value_text("exposure", "1.50E+03", "[s] time");
+    EXPECT_EQ(exposure.keyword(), "EXPOSURE");
+    EXPECT_EQ(exposure.text().substr(0, 41), "EXPOSURE=             1.50E+03 / [s] time");
+    EXPECT_EQ(exposure.value_text(), "1.50E+03");
+    EXPECT_EQ(exposure.value(), card_value(1500.0));
+    EXPECT_EQ(exposure.comment(), "[s] time");
+    const card object = card::with_value_text("OBJECT", "'M 31'");
+    EXPECT_EQ(object.text().substr(0, 16), "OBJECT  = 'M 31'");
+    EXPECT_EQ(object.value(), card_value("M 31"));
+    // A value field of none of the forms is kept as its text.
+    EXPECT_EQ(card::with_value_text("GAIN", "1,5").value_text(), "1,5");
+
+    for (const char* keyword : {"COMMENT", "HISTORY", "", "CONTINUE", "END", "ESO DET DIT", "TOOLONGNAME"}) {
+        EXPECT_TRUE(throws<openfits::usage_error>(errc::invalid_keyword, [&] {
+            (void)card::with_value_text(keyword, "1");
+        })) << keyword;
+    }
+    EXPECT_TRUE(throws<openfits::validation_error>(errc::invalid_character,
+                                                   [] { (void)card::with_value_text("A", "1", "caf\xE9"); }));
+    EXPECT_TRUE(throws<openfits::validation_error>(
+        errc::value_too_long, [] { (void)card::with_value_text("A", "1", std::string(60, 'c')); }));
+}
+
 TEST(card, parse_refuses_a_record_longer_than_80_characters)
 {
     EXPECT_TRUE(throws<openfits::usage_error>(errc::invalid_argument, [] { (void)card::parse(std::string(81, ' ')); }));

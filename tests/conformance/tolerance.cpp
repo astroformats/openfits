@@ -2,24 +2,31 @@
 // SPDX-FileCopyrightText: 2026 Ezequiel Ruiz
 
 // The tolerance table: each departure from the standard that the reader reads as intended, as a constructed fixture
-// with invented values, the diagnostic it gives and how it is read. The rows of the departures of compressed data and
-// checksums come with those features.
+// with invented values, the diagnostic it gives and how it is read. The rows of the departures of compressed data come
+// with that feature.
 
+#include <openfits/checksum.h>
 #include <openfits/error.h>
 #include <openfits/io.h>
 #include <openfits/reader.h>
 
+#include "support/checksums.h"
+#include "support/compressed_fixtures.h"
 #include "support/fixture_builder.h"
+#include "support/table_fixtures.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <ostream>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -30,11 +37,14 @@ using openfits::hdu_kind;
 using openfits::reader;
 using openfits::severity;
 using openfits::value_kind;
+using openfits::test::bintable_records;
 using openfits::test::card_record;
 using openfits::test::extension_records;
+using openfits::test::field_of;
 using openfits::test::fixture;
 using openfits::test::primary_records;
 using openfits::test::record;
+using openfits::test::row_of;
 using openfits::test::with;
 
 struct tolerance_row
@@ -231,6 +241,185 @@ std::vector<tolerance_row> rows()
         primary_with({card_record("OBJECT", "'Andromeda &'"), record("CONTINUE  'galaxy'")}), 0,
         errc::continued_reserved_keyword, severity::warning,
         [](const reader& input) { EXPECT_EQ(input.hdu(0).header().value<std::string>("OBJECT"), "Andromeda galaxy"); });
+
+    // Tables (standard §7.2, §7.3): what the keywords of a column give that it must not have, or cannot be, is ignored.
+    const auto bintable_with = [](std::uint64_t row_size, const std::vector<std::string>& formats,
+                                  const std::vector<std::string>& more, std::uint64_t pcount = 0) {
+        fixture file;
+        file.primary();
+        file.header(with(bintable_records(row_size, 1, formats, pcount), more)).data(row_size + pcount);
+        return file;
+    };
+    add("tform_in_lowercase", bintable_with(4, {"1j"}, {}), 1, errc::invalid_column_format, severity::warning,
+        [](const reader& input) {
+            EXPECT_EQ(input.table(1).columns[0].format.value_or(openfits::column_format{}).type,
+                      openfits::column_type::int32);
+        });
+    add("tnull_of_a_floating_point_column", bintable_with(4, {"E"}, {card_record("TNULL1", "0")}), 1,
+        errc::reserved_keyword, severity::warning,
+        [](const reader& input) { EXPECT_EQ(input.table(1).columns[0].null, std::nullopt); });
+    add("tscal_of_characters", bintable_with(4, {"4A"}, {card_record("TSCAL1", "2.0")}), 1, errc::reserved_keyword,
+        severity::warning,
+        [](const reader& input) { EXPECT_EQ(input.table(1).columns[0].scaling, openfits::scaling{}); });
+    add("fields_short_of_naxis1", bintable_with(6, {"J"}, {}), 1, errc::invalid_column_format, severity::warning,
+        [](const reader& input) { EXPECT_EQ(input.read_column<std::int32_t>(1, 0).size(), 1U); });
+    add("tform_beyond_tfields", bintable_with(4, {"J"}, {card_record("TFORM2", "'E'")}), 1, errc::invalid_structure,
+        severity::warning, [](const reader& input) { EXPECT_EQ(input.table(1).columns.size(), 1U); });
+    add("theap_with_pcount_0", bintable_with(4, {"J"}, {card_record("THEAP", "4")}), 1, errc::reserved_keyword,
+        severity::warning, [](const reader& input) { EXPECT_EQ(input.table(1).heap_size, 0U); });
+    add("tdim_larger_than_its_field", bintable_with(16, {"4J"}, {card_record("TDIM1", "'(3,3)'")}), 1,
+        errc::invalid_dimensions, severity::warning,
+        [](const reader& input) { EXPECT_TRUE(input.table(1).columns[0].dimensions.empty()); });
+    add("tdisp_that_cannot_display_its_column", bintable_with(4, {"J"}, {card_record("TDISP1", "'A8'")}), 1,
+        errc::invalid_display_format, severity::warning,
+        [](const reader& input) { EXPECT_EQ(input.table(1).columns[0].display, std::nullopt); });
+    fixture numeric_null;
+    numeric_null.primary();
+    numeric_null
+        .header(with(openfits::test::ascii_table_records(4, 1, {{.column = 1, .format = "I4"}}),
+                     {card_record("TNULL1", "-99")}))
+        .data(4);
+    add("tnull_of_an_ascii_table_as_a_number", numeric_null, 1, errc::reserved_keyword, severity::warning,
+        [](const reader& input) { EXPECT_EQ(input.table(1).columns[0].null_string, "-99"); });
+    std::vector<std::string> without_tfields = bintable_records(4, 1, {"J"});
+    without_tfields.erase(without_tfields.begin() + 7);
+    add("tfields_missing", fixture().primary().header(without_tfields).data(4), 1, errc::missing_keyword,
+        severity::error, [](const reader& input) {
+            EXPECT_THROW((void)input.table(1), openfits::invalid_data_error);
+            EXPECT_EQ(input.hdu(1).data_size(), 4U);
+        });
+    add("tscal_of_0", bintable_with(4, {"J"}, {card_record("TSCAL1", "0")}), 1, errc::reserved_keyword, severity::error,
+        [](const reader& input) {
+            EXPECT_THROW((void)input.read_column<double>(1, 0), openfits::invalid_data_error);
+            EXPECT_EQ(input.read_column<std::int32_t>(1, 0, {.scaling = openfits::scaling_policy::raw}).size(), 1U);
+        });
+    add("pscal_of_0",
+        fixture()
+            .header({card_record("SIMPLE", "T"), card_record("BITPIX", "16"), card_record("NAXIS", "2"),
+                     card_record("NAXIS1", "0"), card_record("NAXIS2", "1"), card_record("GROUPS", "T"),
+                     card_record("PCOUNT", "1"), card_record("GCOUNT", "1"), card_record("PSCAL1", "0")})
+            .data(4),
+        0, errc::reserved_keyword, severity::error, [](const reader& input) {
+            EXPECT_THROW((void)input.read_parameter<double>(0, 0), openfits::invalid_data_error);
+            EXPECT_EQ(input.read_group<std::int16_t>(0, 0).size(), 1U);
+        });
+
+    // Checksums (standard §4.4.2.7), the sums computed by the test.
+    const std::vector<std::byte> pixels = openfits::test::big_endian(std::vector<std::int16_t>{1, 2, 3});
+    std::vector<std::byte> records = pixels;
+    records.resize(2880);
+    const std::string data_sum = std::to_string(openfits::test::reference_sum(records));
+    const auto image_with = [&pixels](const std::vector<std::string>& more) {
+        return fixture().header(with(primary_records(16, {3}), more)).data(pixels);
+    };
+    add("blank_checksums",
+        image_with({card_record("CHECKSUM", "'                '"), card_record("DATASUM", "'          '")}), 0,
+        std::nullopt, severity::warning, [](const reader& input) {
+            const openfits::checksum_report report = input.verify(0);
+            EXPECT_EQ(report.datasum, openfits::checksum_state::absent);
+            EXPECT_EQ(report.checksum, openfits::checksum_state::absent);
+            EXPECT_EQ(input.read_pixels<std::int16_t>(0), (std::vector<std::int16_t>{1, 2, 3}));
+        });
+    add("datasum_without_quotes", image_with({card_record("DATASUM", data_sum)}), 0, errc::reserved_keyword,
+        severity::warning, [](const reader& input) {
+            EXPECT_EQ(input.verify(0).datasum, openfits::checksum_state::valid);
+            EXPECT_EQ(input.read_pixels<std::int16_t>(0), (std::vector<std::int16_t>{1, 2, 3}));
+        });
+    add("datasum_of_no_sum", image_with({card_record("DATASUM", "'twelve'")}), 0, errc::reserved_keyword,
+        severity::warning, [](const reader& input) {
+            EXPECT_EQ(input.verify(0).datasum, openfits::checksum_state::invalid);
+            EXPECT_THROW((void)input.read_pixels<std::int16_t>(0), openfits::integrity_error);
+        });
+    add("checksum_without_quotes", image_with({card_record("CHECKSUM", "12")}), 0, errc::reserved_keyword,
+        severity::warning,
+        [](const reader& input) { EXPECT_EQ(input.verify(0).checksum, openfits::checksum_state::invalid); });
+
+    // Old compressed images, read as CFITSIO reads them (standard §10.1): an image of 4 x 2 values in tiles of a row,
+    // each tile compressed alone in the heap.
+    const auto compressed_image = [](int bitpix, const std::vector<std::string>& more,
+                                     const std::vector<std::vector<std::byte>>& tiles,
+                                     const std::vector<std::pair<std::string, std::string>>& extra_columns = {},
+                                     const std::vector<std::vector<std::byte>>& extra_fields = {}) {
+        std::vector<std::pair<std::string, std::string>> columns{{"COMPRESSED_DATA", "1PB"}};
+        columns.insert(columns.end(), extra_columns.begin(), extra_columns.end());
+        std::vector<std::vector<std::byte>> rows;
+        std::vector<std::byte> heap;
+        for (std::size_t t = 0; t < tiles.size(); ++t) {
+            std::vector<std::byte> row = openfits::test::p_descriptor(static_cast<std::uint32_t>(tiles[t].size()),
+                                                                      static_cast<std::uint32_t>(heap.size()));
+            if (t < extra_fields.size()) {
+                row.insert(row.end(), extra_fields[t].begin(), extra_fields[t].end());
+            }
+            rows.push_back(std::move(row));
+            heap.insert(heap.end(), tiles[t].begin(), tiles[t].end());
+        }
+        fixture file;
+        file.primary();
+        std::vector<std::string> keywords = openfits::test::image_keywords(bitpix, {4, 2}, {4, 1}, "RICE_1");
+        // ZCMPTYPE and the parameters of the algorithm come from more.
+        keywords.pop_back();
+        keywords.insert(keywords.end(), more.begin(), more.end());
+        openfits::test::binary_table_unit(file, columns, rows, heap, keywords);
+        return file;
+    };
+    const std::vector<std::int16_t> shorts{1, 2, 3, 4, -5, 6, -7, 8};
+    const std::vector<std::int16_t> first_shorts(shorts.begin(), shorts.begin() + 4);
+    const std::vector<std::int16_t> second_shorts(shorts.begin() + 4, shorts.end());
+    const std::vector<std::vector<std::byte>> short_tiles{openfits::test::rice16(first_shorts),
+                                                          openfits::test::rice16(second_shorts)};
+    const auto reads_shorts = [shorts](const reader& input) { EXPECT_EQ(input.read_pixels<std::int16_t>(1), shorts); };
+    add("rice_one",
+        compressed_image(16,
+                         {card_record("ZCMPTYPE", "'RICE_ONE'"), card_record("ZNAME1", "'BLOCKSIZE'"),
+                          card_record("ZVAL1", "32"), card_record("ZNAME2", "'BYTEPIX'"), card_record("ZVAL2", "2")},
+                         short_tiles),
+        1, errc::invalid_compression, severity::info, reads_shorts);
+    add("rice_parameters_reversed",
+        compressed_image(16,
+                         {card_record("ZCMPTYPE", "'RICE_1'"), card_record("ZNAME1", "'BLOCKSIZE'"),
+                          card_record("ZVAL1", "2"), card_record("ZNAME2", "'BYTEPIX'"), card_record("ZVAL2", "32")},
+                         short_tiles),
+        1, errc::invalid_compression, severity::warning, reads_shorts);
+    const std::vector<std::int32_t> ints{100, -200, 300, -400, 500, -600, 700, -800};
+    // The readings that hold a vector are given as lvalues, and copied: a closure holds a captured const vector as
+    // const, so that its move would be a copy, which may throw.
+    const auto reads_ints = [ints](const reader& input) { EXPECT_EQ(input.read_pixels<std::int32_t>(1), ints); };
+    add("rice_noisebit",
+        compressed_image(
+            32,
+            {card_record("ZCMPTYPE", "'RICE_1'"), card_record("ZNAME1", "'BLOCKSIZE'"), card_record("ZVAL1", "32"),
+             card_record("ZNAME2", "'NOISEBIT'"), card_record("ZVAL2", "2")},
+            {openfits::test::rice32({100, -200, 300, -400}), openfits::test::rice32({500, -600, 700, -800})}),
+        1, errc::invalid_compression, severity::warning, reads_ints);
+    // Quantized codes 0 to 7, restored as code x ZSCALE + ZZERO without dithering.
+    const std::vector<std::vector<std::byte>> code_tiles{openfits::test::rice32({0, 1, 2, 3}),
+                                                         openfits::test::rice32({4, 5, 6, 7})};
+    const std::vector<std::string> rice_codes{card_record("ZCMPTYPE", "'RICE_1'"), card_record("ZNAME1", "'BLOCKSIZE'"),
+                                              card_record("ZVAL1", "32"), card_record("ZNAME2", "'BYTEPIX'"),
+                                              card_record("ZVAL2", "4")};
+    add("zscale_and_zzero_keywords",
+        compressed_image(-32, with(rice_codes, {card_record("ZSCALE", "0.5"), card_record("ZZERO", "10.0")}),
+                         code_tiles),
+        1, errc::invalid_compression, severity::info, [](const reader& input) {
+            EXPECT_EQ(input.read_pixels<float>(1),
+                      (std::vector<float>{10.0F, 10.5F, 11.0F, 11.5F, 12.0F, 12.5F, 13.0F, 13.5F}));
+        });
+    add("quantized_without_zquantiz",
+        compressed_image(-32, rice_codes, code_tiles, {{"ZSCALE", "1D"}, {"ZZERO", "1D"}},
+                         {row_of({field_of(0.25), field_of(-1.0)}), row_of({field_of(2.0), field_of(0.0)})}),
+        std::nullopt, std::nullopt, severity::warning, [](const reader& input) {
+            // NO_DITHER (standard §10.2.1), each tile with its own ZSCALE and ZZERO.
+            EXPECT_EQ(input.read_pixels<float>(1),
+                      (std::vector<float>{-1.0F, -0.75F, -0.5F, -0.25F, 8.0F, 10.0F, 12.0F, 14.0F}));
+        });
+    const std::vector<float> reals{0.5F, -1.5F, 2.25F, 1e30F, -0.0F, 3.0F, 4.0F, 5.0F};
+    const std::vector<std::byte> real_bytes = openfits::test::big_endian(reals);
+    const auto reads_reals = [reals](const reader& input) { EXPECT_EQ(input.read_pixels<float>(1), reals); };
+    add("zquantiz_none",
+        compressed_image(-32, {card_record("ZCMPTYPE", "'GZIP_1'"), card_record("ZQUANTIZ", "'NONE'")},
+                         {openfits::test::gzip(std::span(real_bytes).first(16)),
+                          openfits::test::gzip(std::span(real_bytes).subspan(16))}),
+        std::nullopt, std::nullopt, severity::warning, reads_reals);
 
     // Units whose headers give no size stop the walk.
     add("bitpix_outside_its_values", fixture().header(primary_records(24)).image({1}), 0, errc::invalid_structure,

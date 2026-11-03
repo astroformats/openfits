@@ -69,8 +69,12 @@ TEST(concurrency_walk, threads_walk_a_file_together)
             EXPECT_EQ(seen[(t * 3) + 1], &input.hdu(index - 1));
             EXPECT_EQ(seen[(t * 3) + 2], &input.hdu(4 * thread_count));
         }
-        // Each header was read once.
-        EXPECT_EQ(counter.reads().size(), 4 * thread_count + 1) << concurrent;
+        // The file was walked once: each read starts after the one before it.
+        const std::vector<openfits::test::served_read> reads = counter.reads();
+        ASSERT_FALSE(reads.empty());
+        for (std::size_t i = 1; i < reads.size(); ++i) {
+            EXPECT_GT(reads[i].offset, reads[i - 1].offset) << concurrent;
+        }
     }
 }
 

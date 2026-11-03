@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <new>
+#include <string>
 #include <utility>
 
 namespace openfits {
@@ -68,6 +69,15 @@ std::span<const std::byte> memory_sink::data() const noexcept
 std::vector<std::byte> memory_sink::release() noexcept
 {
     return std::exchange(data_, {});
+}
+
+void memory_sink::reserve(std::uint64_t bytes)
+{
+    if (bytes > data_.max_size()) {
+        throw limit_error(errc::allocation_too_large,
+                          "a memory sink cannot hold " + std::to_string(bytes) + " bytes in memory");
+    }
+    data_.reserve(bytes);
 }
 
 memory_device::memory_device(std::span<std::byte> data) noexcept : data_(data) {}
