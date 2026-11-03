@@ -42,7 +42,8 @@ jobs:
       - name: Build
         run: cmake --build --preset linux-clang-fuzz
 
-      # Every target at once, so that the step takes the time of one on any number of processors.
+      # Eight targets at once, so that the step takes the time of two on the four processors of the runner, each
+      # target with half of one.
       - name: Fuzz
         run: ctest --preset linux-clang-fuzz --parallel 8
 

@@ -9,9 +9,11 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
+#include <vector>
 
 /// @file
-/// Images: the arrays of primary HDUs and IMAGE extensions (standard §3.3.2, §7.1).
+/// Images: the arrays of primary HDUs and IMAGE extensions (standard §3.3.2, §7.1), and random groups (standard §6).
 
 namespace openfits {
 
@@ -57,6 +59,42 @@ struct image_info
     [[nodiscard]] OPENFITS_API numeric_type value_type() const;
 
     friend bool operator==(const image_info&, const image_info&) = default;
+};
+
+/// A parameter of random groups (standard §6.1.2): its name and the scaling of its values.
+struct group_parameter
+{
+    /// PTYPEn, without trailing spaces; empty without it.
+    std::string name{};
+    /// PSCALn and PZEROn (standard §6.1.2, Eq. 5): the identity when the header has neither.
+    openfits::scaling scaling{};
+
+    friend bool operator==(const group_parameter&, const group_parameter&) = default;
+};
+
+/// Random groups (standard §6): GCOUNT groups in the primary HDU, each of PCOUNT parameters and an array, as a reader
+/// describes them. The standard deprecates them for anything but the existing use in radio interferometry, and the
+/// writer does not write them.
+///
+/// A value: copies are independent.
+struct groups_info
+{
+    /// The type of the stored parameters and array elements, which share it (standard §6.3).
+    openfits::bitpix bitpix = openfits::bitpix::uint8;
+    /// The axes of the array of each group: NAXIS2 to NAXISm, after NAXIS1 = 0 (standard §6.1.1). With NAXIS = 1 there
+    /// are none, and each group holds one element, the empty product of Eq. 6, which a read takes for an axis of one.
+    openfits::geometry geometry{};
+    /// BSCALE and BZERO of the array elements (standard §4.4.2.5).
+    openfits::scaling scaling{};
+    /// BLANK of integer array elements.
+    std::optional<std::int64_t> blank{};
+    /// GCOUNT, the number of groups.
+    std::uint64_t count = 0;
+    /// The PCOUNT parameters of each group, in their order.
+    std::vector<group_parameter> parameters{};
+    openfits::header header{};
+
+    friend bool operator==(const groups_info&, const groups_info&) = default;
 };
 
 #if defined(_MSC_VER)

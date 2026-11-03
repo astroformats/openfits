@@ -164,6 +164,181 @@ def d1(directory: Path):
     hdu.writeto(directory / 'd1-rich-header.fits', overwrite=True, output_verify='silentfix')
 
 
+def replace_card(header: bytearray, keyword: str, text: str):
+    """Replaces the record of keyword in the blocks of a header with text, padded to 80 characters."""
+    for start in range(0, len(header), 80):
+        if header[start:start + 8].decode('ascii').rstrip() == keyword:
+            header[start:start + 80] = text.ljust(80).encode('ascii')
+            return
+    raise KeyError(keyword)
+
+
+def insert_card(header: bytearray, before: str, text: str):
+    """Inserts text as a record before the record of keyword before, the header keeping its blocks."""
+    for start in range(0, len(header), 80):
+        if header[start:start + 8].decode('ascii').rstrip() == before:
+            if header[-80:] != b' ' * 80:
+                header.extend(b' ' * 2880)
+            header[start:start] = text.ljust(80).encode('ascii')
+            del header[-80:]
+            return
+    raise KeyError(before)
+
+
+def d2(directory: Path):
+    """A binary table of every TFORMn type, five rows; THEAP and a gap of 104 bytes before the heap set by hand."""
+    rows = 5
+    rng = np.random.default_rng(2)
+    bits = rng.integers(0, 2, size=(rows, 13)).astype(bool)
+    columns = [
+        fits.Column(name='FLAG', format='L', array=np.array([True, False, True, True, False])),
+        fits.Column(name='BITS', format='13X', array=bits),
+        fits.Column(name='UBYTE', format='B', array=np.array([0, 1, 128, 254, 255], dtype=np.uint8)),
+        fits.Column(name='SBYTE', format='B', bzero=-128, array=np.array([-128, -1, 0, 1, 127], dtype=np.int8)),
+        fits.Column(name='SHORT', format='I', array=np.array([-32768, -1, 0, 1, 32767], dtype=np.int16)),
+        fits.Column(name='USHORT', format='I', bzero=32768, array=np.array([0, 1, 32768, 65534, 65535], dtype=np.uint16)),
+        fits.Column(name='INT', format='J', array=np.array([-2**31, -7, 0, 7, 2**31 - 1], dtype=np.int32)),
+        fits.Column(name='UINT', format='J', bzero=2**31, array=np.array([0, 1, 2**31, 2**32 - 2, 2**32 - 1], dtype=np.uint32)),
+        fits.Column(name='LONG', format='K', array=np.array([-2**63, -1, 0, 1, 2**63 - 1], dtype=np.int64)),
+        fits.Column(name='ULONG', format='K', bzero=2**63, array=np.array([0, 1, 2**63, 2**64 - 2, 2**64 - 1], dtype=np.uint64)),
+        fits.Column(name='FLOAT', format='E', array=np.array([1.5, -0.0, np.nan, np.inf, 1e-38], dtype=np.float32)),
+        fits.Column(name='DOUBLE', format='D', unit='deg', disp='F12.5',
+                    array=np.array([10.684708, -41.26875, 0.1, 1e300, -5e-324])),
+        fits.Column(name='NAME', format='8A', array=np.array(['M 31', 'M 33', '', 'NGC 6992', 'IC 434'])),
+        fits.Column(name='CPLX', format='C', array=np.array([1 + 2j, -1.5j, 3, 0, -2 - 2j], dtype=np.complex64)),
+        fits.Column(name='DCPLX', format='M', array=np.array([1e100 + 1j, 0.1 - 0.2j, 0, 1j, -1], dtype=np.complex128)),
+        fits.Column(name='MATRIX', format='6I', dim='(3,2)', array=np.arange(30, dtype=np.int16).reshape(rows, 2, 3)),
+        fits.Column(name='EMPTY', format='0J', array=np.zeros((rows, 0), dtype=np.int32)),
+        # Stored as 100 + 0.25 x stored: 100, 100.25, 0, -50.5 and 1e6; TSCAL18 and TZERO18 are set by hand below, since
+        # astropy 8.0.1 refuses to write the physical values of a scaled column of integers.
+        fits.Column(name='SCALED', format='J', array=np.array([0, 1, -400, -602, 3999600], dtype=np.int32)),
+        fits.Column(name='NULLED', format='J', null=-999, array=np.array([1, -999, 3, -999, 5], dtype=np.int32)),
+        fits.Column(name='VLA_P', format='PJ()', array=np.array(
+            [np.array([1, 2, 3]), np.array([], dtype=np.int32), np.array([4]), np.array([5, 6]), np.array([7, 8, 9, 10])],
+            dtype=object)),
+        fits.Column(name='VLA_Q', format='QD()', array=np.array(
+            [np.array([0.5]), np.array([1.5, 2.5]), np.array([], dtype=np.float64), np.array([3.5]), np.array([4.5])],
+            dtype=object)),
+        fits.Column(name='WORDS', format='12A4', array=np.array(['abcdefghijkl', 'mnop', 'qrstuvwx', '', 'yz'])),
+        fits.Column(name='NOTES', format='PA()', array=np.array(['first', '', 'third note', 'x', 'the fifth'],
+                                                               dtype=object)),
+    ]
+    table = fits.BinTableHDU.from_columns(columns, name='CATALOG')
+    table.header['OBJECT'] = ('every TFORMn type', 'the sample D2')
+    path = directory / 'd2-bintable.fits'
+    fits.HDUList([fits.PrimaryHDU(), table]).writeto(path, overwrite=True)
+    # THEAP with a gap before the heap (standard §7.3.5), by hand: the descriptors stay relative to the heap.
+    raw = bytearray(path.read_bytes())
+    with fits.open(path) as units:
+        header_start = 2880
+        data_start = header_start + len(units[1].header.tostring())
+        row_bytes = units[1].header['NAXIS1'] * units[1].header['NAXIS2']
+        pcount = units[1].header['PCOUNT']
+    gap = 104
+    header = raw[header_start:data_start]
+    replace_card(header, 'PCOUNT', f"PCOUNT  = {pcount + gap:>20} / size of special data area")
+    insert_card(header, 'EXTNAME', f"THEAP   = {row_bytes + gap:>20} / heap after a gap")
+    insert_card(header, 'EXTNAME', 'TSCAL18 =                 0.25')
+    insert_card(header, 'EXTNAME', 'TZERO18 =                100.0')
+    data = raw[data_start:data_start + row_bytes] + bytes(gap) + raw[data_start + row_bytes:data_start + row_bytes +
+                                                                     pcount]
+    data += bytes((-len(data)) % 2880)
+    path.write_bytes(bytes(raw[:header_start]) + bytes(header) + bytes(data))
+
+
+def d3(directory: Path):
+    """An ASCII table: Aw, Iw, Fw.d, Ew.d and Dw.d fields, a TNULLn string, and by hand a blank field and a field
+    without its decimal point."""
+    columns = [
+        fits.Column(name='NAME', format='A10', array=np.array(['M 31', 'M 33', 'NGC 6992', 'IC 434'])),
+        fits.Column(name='COUNT', format='I6', null='*', array=np.array([42, -17, 0, 123456])),
+        fits.Column(name='FLUX', format='F10.3', unit='Jy', array=np.array([12.5, -0.125, 1.0, 9999.999])),
+        fits.Column(name='MAG', format='E12.5', array=np.array([3.44, -1.0e-10, 5.72e20, 0.0])),
+        fits.Column(name='DIST', format='D20.12', array=np.array([778000.0, 1e-300, 2.73e1, -1.0])),
+    ]
+    table = fits.TableHDU.from_columns(columns, name='ASCII')
+    path = directory / 'd3-ascii-table.fits'
+    fits.HDUList([fits.PrimaryHDU(), table]).writeto(path, overwrite=True)
+    raw = bytearray(path.read_bytes())
+    with fits.open(path) as units:
+        header = units[1].header
+        data_start = 2880 + len(header.tostring())
+        width = header['NAXIS1']
+        count_column = header['TBCOL2'] - 1
+        flux_column = header['TBCOL3'] - 1
+    # The COUNT of row 2 blank, which is 0 (standard §7.2.5); its FLUX without a decimal point, 12345 read as 12.345;
+    # the COUNT of row 3 the TNULLn string.
+    row = data_start + (2 * width)
+    raw[row + count_column:row + count_column + 6] = b'      '
+    raw[row + flux_column:row + flux_column + 10] = b'     12345'
+    row = data_start + (3 * width)
+    raw[row + count_column:row + count_column + 6] = b'*     '
+    path.write_bytes(bytes(raw))
+
+
+def d4(directory: Path):
+    """Random groups: three groups of a 7 x 5 array of 32-bit integers, each value 100 g plus its index, and four
+    parameters, UU, VV and DATE twice, which are summed (standard §6.1.2). astropy 8.0.1 writes wrong stored values for
+    parameters given with PSCALn and PZEROn, so the stored ones are given and PSCAL1 = 1E-9, PZERO3 = 2460000.5 and
+    PSCAL4 = 0.001 set by hand: UU is 1e-9, -2e-9 and 3e-9, and DATE 2460000.625, 2460001.75 and 2460002.875."""
+    groups = 3
+    data = np.array([np.arange(35, dtype=np.int32).reshape(5, 7) + 100 * g for g in range(groups)],
+                    dtype=np.int32).reshape(groups, 1, 5, 7)
+    pardata = [np.array([1, -2, 3], dtype=np.int32), np.array([10, 20, 30], dtype=np.int32),
+               np.array([0, 1, 2], dtype=np.int32), np.array([125, 250, 375], dtype=np.int32)]
+    rows = fits.GroupData(data, parnames=['UU', 'VV', 'DATE', 'DATE'], pardata=pardata, bitpix=32)
+    hdu = fits.GroupsHDU(rows)
+    hdu.header['OBJECT'] = ('random groups', 'the sample D4')
+    path = directory / 'd4-random-groups.fits'
+    hdu.writeto(path, overwrite=True)
+    raw = bytearray(path.read_bytes())
+    header_size = len(fits.getheader(path).tostring())
+    header = raw[:header_size]
+    insert_card(header, 'OBJECT', 'PSCAL1  =                1E-09 / scale of UU')
+    insert_card(header, 'OBJECT', 'PZERO3  =            2460000.5 / the day of the date')
+    insert_card(header, 'OBJECT', 'PSCAL4  =                0.001 / the fraction of the day')
+    path.write_bytes(bytes(header) + bytes(raw[header_size:]))
+
+
+# The time of the checksums of the C samples, which astropy is given as their comment, so that every run writes the same
+# bytes: astropy writes the time of the run otherwise.
+CHECKSUM_TIME = '2026-11-02T00:00:00'
+
+
+def with_checksums(source: Path, target: Path):
+    """The units of source written to target with CHECKSUM and DATASUM in each, which astropy then verifies."""
+    with fits.open(source, do_not_scale_image_data=True, memmap=False) as units:
+        for unit in units:
+            unit.add_checksum(when=CHECKSUM_TIME)
+        units.writeto(target, overwrite=True, checksum=False)
+    with fits.open(source) as original, fits.open(target, checksum=True) as units:
+        assert len(units) == len(original), target
+        for before, unit in zip(original, units):
+            assert unit.verify_datasum() == 1 and unit.verify_checksum() == 1, target
+            if before.data is None:
+                assert unit.data is None, target
+            else:
+                assert np.array_equal(before.data, unit.data, equal_nan=True), target
+
+
+def c1(directory: Path):
+    with_checksums(directory / 'a4-u16.fits', directory / 'c1-u16-checksum.fits')
+
+
+def c2(directory: Path):
+    with_checksums(directory / 'a13-mef.fits', directory / 'c2-mef-checksum.fits')
+
+
+def c4(directory: Path):
+    """C1 with CHECKSUM and DATASUM blank strings, which assert nothing of the sums (standard §4.4.2.7). astropy 8.0.1
+    takes a blank CHECKSUM for a mismatch and fails on a blank DATASUM, so that it does not verify this sample."""
+    raw = bytearray((directory / 'c1-u16-checksum.fits').read_bytes())
+    header = raw[:2880]
+    replace_card(header, 'CHECKSUM', f"CHECKSUM= '{' ' * 16}'   / {CHECKSUM_TIME}")
+    replace_card(header, 'DATASUM', f"DATASUM = '{' ' * 10}'         / {CHECKSUM_TIME}")
+    (directory / 'c4-checksum-blank.fits').write_bytes(bytes(header) + bytes(raw[2880:]))
+
+
 def write_image(directory: Path, name: str, data: np.ndarray, description: str):
     hdu = fits.PrimaryHDU(data)
     hdu.header['OBJECT'] = ('pattern', description)
@@ -243,7 +418,7 @@ def main():
     directory = Path(sys.argv[1])
     directory.mkdir(parents=True, exist_ok=True)
     assert astropy.__version__ == '8.0.1', astropy.__version__
-    for make in (a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, d1):
+    for make in (a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, d1, d2, d3, d4, c1, c2, c4):
         make(directory)
     print('astropy', astropy.__version__, 'numpy', np.__version__)
 

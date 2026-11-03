@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -47,6 +48,12 @@ struct scanned_number
 /// its magnitude is beyond the range of double. A magnitude below the smallest subnormal becomes a zero of the same
 /// sign.
 [[nodiscard]] std::optional<double> real_value(std::string_view token);
+
+/// The value of a real of the form of std::from_chars, without a plus sign before it and with the exponent letter E,
+/// rounded to the nearest double, without allocating. Nothing when number holds another text or a value that
+/// std::from_chars reports out of range, and in standard libraries whose std::from_chars of double is missing or
+/// reports subnormals out of range: real_value() reads such numbers.
+[[nodiscard]] std::optional<double> plain_real_value(std::span<const char> number) noexcept;
 
 /// What read_value_field() finds in a value field.
 struct value_field

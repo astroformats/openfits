@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Ezequiel Ruiz
 
+#include <openfits/checksum.h>
 #include <openfits/io.h>
 #include <openfits/reader.h>
 #include <openfits/types.h>
 
+#include "support/checksums.h"
 #include "support/counting_source.h"
 #include "support/fixture_builder.h"
 #include "support/threads.h"
@@ -14,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace {
@@ -82,6 +85,45 @@ TEST(concurrency_pixels, threads_read_the_values_of_one_reader)
             ASSERT_EQ(wholes[t].size(), width * height);
             EXPECT_EQ(wholes[t][12345], 12345U);
             EXPECT_EQ(extension_values[t], 64U * 64U);
+        }
+    }
+}
+
+// Threads verify the units of one reader and read its image whole, which verifies DATASUM as it is read, at once.
+TEST(concurrency_pixels, threads_verify_the_checksums_of_one_reader)
+{
+    std::vector<std::int16_t> stored(width * height);
+    for (std::size_t i = 0; i < stored.size(); ++i) {
+        stored[i] = static_cast<std::int16_t>(i % 30000);
+    }
+    std::vector<std::byte> file =
+        openfits::test::checked_unit(primary_records(16, {width, height}), big_endian(stored));
+    constexpr std::size_t units = 5;
+    for (std::size_t u = 1; u < units; ++u) {
+        const std::vector<std::byte> unit =
+            openfits::test::checked_unit(openfits::test::extension_records("IMAGE", 8, {64, 64}),
+                                         std::vector<std::byte>(std::size_t{64} * 64, std::byte{7}));
+        file.insert(file.end(), unit.begin(), unit.end());
+    }
+    for (const int kind : {0, 1, 2}) {
+        std::unique_ptr<openfits::input_source> source;
+        if (kind == 0) {
+            // The file outlives the source, which borrows it.
+            source = std::make_unique<openfits::memory_source>(std::span<const std::byte>(file));
+        } else {
+            source = std::make_unique<counting_source>(file, kind == 2);
+        }
+        const reader input(std::move(source));
+        std::vector<openfits::checksum_report> reports(thread_count);
+        std::vector<std::size_t> sizes(thread_count);
+        run_threads(thread_count, [&](std::size_t t) {
+            reports[t] = input.verify(t % units);
+            sizes[t] = input.read_pixels<std::int16_t>(0).size();
+        });
+        for (std::size_t t = 0; t < thread_count; ++t) {
+            EXPECT_EQ(reports[t].datasum, openfits::checksum_state::valid) << t;
+            EXPECT_EQ(reports[t].checksum, openfits::checksum_state::valid) << t;
+            EXPECT_EQ(sizes[t], width * height) << t;
         }
     }
 }

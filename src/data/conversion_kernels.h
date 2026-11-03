@@ -555,6 +555,7 @@ private:
                 return Target{};
             }
         case blank_policy::nan:
+        case blank_policy::ignore:
             break;
         }
         if constexpr (std::floating_point<Target>) {

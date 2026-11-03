@@ -406,6 +406,22 @@ std::optional<double> real_value(std::string_view token)
     return std::nullopt;
 }
 
+std::optional<double> plain_real_value(std::span<const char> number) noexcept
+{
+#if (defined(_LIBCPP_VERSION) && _LIBCPP_VERSION < 200000) || (defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE < 12)
+    (void)number;
+    return std::nullopt;
+#else
+    double value = 0;
+    const char* const end = number.data() + number.size();
+    const auto result = std::from_chars(number.data(), end, value, std::chars_format::general);
+    if (result.ec != std::errc{} || result.ptr != end) {
+        return std::nullopt;
+    }
+    return value;
+#endif
+}
+
 value_field read_value_field(std::string_view field, bool at_byte_11, std::vector<diagnostic>& departures)
 {
     value_field result;

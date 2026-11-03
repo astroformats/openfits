@@ -26,5 +26,10 @@ endfunction()
 openfits_add_sample(custom_io)
 openfits_add_sample(read_info "${PROJECT_SOURCE_DIR}/tests/data/astropy/a13-mef.fits")
 openfits_add_sample(read_pixels "${PROJECT_SOURCE_DIR}/tests/data/astropy/a11-scaled.fits")
+openfits_add_sample(read_table "${PROJECT_SOURCE_DIR}/tests/data/astropy/d2-bintable.fits")
 openfits_add_sample(write_image "${CMAKE_CURRENT_BINARY_DIR}/write_image.fits")
 openfits_add_sample(stream_io "${CMAKE_CURRENT_BINARY_DIR}/stream_io.fits")
+openfits_add_sample(convert "${PROJECT_SOURCE_DIR}/tests/data/fpack/b1-u16-rice.fits"
+                    "${CMAKE_CURRENT_BINARY_DIR}/convert.fits" -32 gzip2 4)
+openfits_add_sample(compress "${PROJECT_SOURCE_DIR}/tests/data/astropy/a13-mef.fits"
+                    "${CMAKE_CURRENT_BINARY_DIR}/compress.fits" rice)

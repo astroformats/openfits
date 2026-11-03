@@ -34,7 +34,12 @@ TEST(keywords, names_the_structural_keywords)
     EXPECT_TRUE(is_structural_keyword("TNULL5"));
     EXPECT_TRUE(is_structural_keyword("ZVAL3"));
     EXPECT_TRUE(is_structural_keyword("CONTINUE"));
-    EXPECT_FALSE(is_structural_keyword("TTYPE1"));
+    // The writer of tables writes the names, units and display formats of columns from their models.
+    EXPECT_TRUE(is_structural_keyword("TTYPE1"));
+    EXPECT_TRUE(is_structural_keyword("TUNIT2"));
+    EXPECT_TRUE(is_structural_keyword("TDISP999"));
+    EXPECT_FALSE(is_structural_keyword("TDMIN1"));
+    EXPECT_FALSE(is_structural_keyword("PTYPE1"));
     EXPECT_FALSE(is_structural_keyword("ZSOURCE"));
     EXPECT_FALSE(is_structural_keyword("EXTNAME"));
 }

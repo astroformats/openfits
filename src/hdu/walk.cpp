@@ -3,6 +3,7 @@
 
 #include "hdu/walk.h"
 
+#include "checksum/checksum.h"
 #include "hdu/header_reader.h"
 
 #include <algorithm>
@@ -99,10 +100,10 @@ std::vector<std::reference_wrapper<const hdu_info>> unit_walk::units()
     return {units_.begin(), units_.end()};
 }
 
-std::optional<std::size_t> unit_walk::find(const std::function<bool(const hdu_info&)>& match)
+std::optional<std::size_t> unit_walk::find(const std::function<bool(const hdu_info&)>& match, std::size_t from)
 {
     const std::scoped_lock lock(mutex_);
-    for (std::size_t index = 0;; ++index) {
+    for (std::size_t index = from;; ++index) {
         while (units_.size() <= index && walk_next()) {
         }
         if (index >= units_.size()) {
@@ -155,7 +156,7 @@ bool unit_walk::walk_next()
     const std::uint64_t used = std::min(diagnostics_, limits_.max_diagnostics);
     diagnostic_log log(strict_,
                        limits_.max_diagnostics == 0 ? 0 : std::max<std::uint64_t>(1, limits_.max_diagnostics - used));
-    unit_header read = read_header(source_, offset, index, index == 0 ? "SIMPLE" : "XTENSION", limits_, log);
+    unit_header read = read_header(source_, offset, index, index == 0 ? "SIMPLE" : "XTENSION", limits_, log, window_);
     if (read.outcome == header_outcome::not_a_header) {
         if (index == 0) {
             throw invalid_data_error(errc::not_a_fits_file,
@@ -186,6 +187,7 @@ bool unit_walk::walk_next()
 
     header cards(std::move(read.cards));
     unit_structure structure = analyze_header(cards, index, offset, log);
+    check_checksum_keywords(cards, read.sum, index, offset, log);
     const std::uint64_t data_offset = offset + read.size;
     const std::optional<std::uint64_t> data_size = structure.data_size;
     units_.push_back(hdu_access::make(index, std::move(cards), offset, read.size, std::move(structure), log.release()));

@@ -10,6 +10,7 @@
 #include <openfits/reader.h>
 
 #include "support/fixture_builder.h"
+#include "support/table_fixtures.h"
 
 #include <gtest/gtest.h>
 
@@ -212,7 +213,7 @@ TEST(conformance_headers, the_keywords_of_arrays_are_not_checked_in_tables)
 {
     const reader input = open(fixture()
                                   .primary()
-                                  .header(with(openfits::test::extension_records("BINTABLE", 8, {4, 1}, 0, 1),
+                                  .header(with(openfits::test::bintable_records(4, 1, {"4A"}),
                                                {card_record("BSCALE", "0"), card_record("BLANK", "'x'")}))
                                   .data(4));
     EXPECT_TRUE(input.hdu(1).diagnostics().empty());

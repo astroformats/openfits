@@ -5,7 +5,8 @@
 # find_package (the default), the installed pkg-config file, or the sources of OPENFITS_SOURCE_DIR through FetchContent,
 # as a project that is not the top level. The test suite of the main project builds it against a staged install (see
 # tests/CMakeLists.txt), and CI builds it against the vcpkg port, through pkg-config and from the sources. Given
-# OPENFITS_PACKAGE_VERSION, the version of the package, it also checks the versions that the package accepts.
+# OPENFITS_PACKAGE_VERSION, the version of the package, it also checks the versions that the package accepts, and the
+# name of a Windows DLL.
 
 cmake_minimum_required(VERSION 3.25)
 
@@ -42,6 +43,19 @@ if(OPENFITS_CONSUMED_AS STREQUAL "package" AND OPENFITS_PACKAGE_VERSION)
         endif()
     endforeach()
     find_package(openfits ${major_minor} CONFIG REQUIRED)
+    # The DLL of a Windows shared library is named after its minor version, as the soname is elsewhere, and the
+    # consumer loads it by that name.
+    get_target_property(type openfits::openfits TYPE)
+    if(WIN32 AND type STREQUAL "SHARED_LIBRARY")
+        get_target_property(configurations openfits::openfits IMPORTED_CONFIGURATIONS)
+        foreach(configuration ${configurations})
+            get_target_property(location openfits::openfits IMPORTED_LOCATION_${configuration})
+            get_filename_component(name "${location}" NAME)
+            if(NOT name MATCHES "^(lib)?openfits-${major}\\.${minor}d?\\.dll$")
+                message(FATAL_ERROR "The DLL of openfits ${version} is ${name}")
+            endif()
+        endforeach()
+    endif()
     target_link_libraries(consumer PRIVATE openfits::openfits)
 elseif(OPENFITS_CONSUMED_AS STREQUAL "package")
     find_package(openfits CONFIG REQUIRED)

@@ -20,12 +20,26 @@ configure_file(
 
 # The internal code, in namespace openfits::detail.
 set(internal_sources
+    checksum/checksum.cpp
+    compress/dither.cpp
+    compress/gzip.cpp
+    compress/hcompress.cpp
+    compress/image_compress.cpp
+    compress/image_tiles.cpp
+    compress/plio.cpp
+    compress/quantize.cpp
+    compress/rice.cpp
+    compress/shuffle.cpp
+    compress/table_tiles.cpp
+    compress/tile_cache.cpp
+    compress/tile_grid.cpp
     core/calendar.cpp
     core/checked_math.cpp
     core/decimal.cpp
     core/diagnostic_log.cpp
     core/endian.cpp
     core/keyword_name.cpp
+    core/parallel.cpp
     core/quote.cpp
     core/utf16.cpp
     core/utf8.cpp
@@ -34,6 +48,7 @@ set(internal_sources
     data/image_description.cpp
     data/image_read.cpp
     data/image_write.cpp
+    data/random_groups.cpp
     hdu/header_reader.cpp
     hdu/section.cpp
     hdu/structure.cpp
@@ -45,7 +60,11 @@ set(internal_sources
     io/paths.cpp
     io/range_check.cpp
     io/thread_safe_device.cpp
-    io/thread_safe_source.cpp)
+    io/thread_safe_source.cpp
+    table/ascii_field.cpp
+    table/column_read.cpp
+    table/table_description.cpp
+    table/table_write.cpp)
 if(WIN32)
     list(APPEND internal_sources io/native_file_win32.cpp)
 else()
@@ -55,6 +74,7 @@ endif()
 # The public API.
 set(public_sources
     card.cpp
+    checksum.cpp
     date_time.cpp
     display_format.cpp
     error.cpp
@@ -62,6 +82,8 @@ set(public_sources
     header.cpp
     image.cpp
     reader.cpp
+    table.cpp
+    tile_cache.cpp
     types.cpp
     version.cpp
     writer.cpp
@@ -92,6 +114,14 @@ set_target_properties(openfits PROPERTIES
     SOVERSION "${OPENFITS_SOVERSION}"
     # The Debug library has a name of its own, so that Debug and Release builds install side by side in one prefix.
     DEBUG_POSTFIX d)
+
+# The Windows DLL is named after the minor version, as the soname is elsewhere (openfits-0.3.dll, libopenfits-0.3.dll
+# with MinGW), so that a program loads the DLL of the minor version that it was built against. The import library keeps
+# the name of the library, as libopenfits.so does, so that programs link with it as before. These are the names that
+# DLL_NAME_WITH_SOVERSION gives from CMake 3.27 on.
+if(WIN32 AND OPENFITS_SHARED)
+    set_target_properties(openfits PROPERTIES RUNTIME_OUTPUT_NAME "openfits-${OPENFITS_SOVERSION}")
+endif()
 
 # windows.h without the min and max macros, which break the standard headers included after it.
 set(windows_definitions NOMINMAX WIN32_LEAN_AND_MEAN)

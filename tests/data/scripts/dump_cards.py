@@ -5,7 +5,8 @@ the samples compare with the reader card by card. Run it with a Python that has 
 
     python -I tests/data/scripts/dump_cards.py tests/data/astropy/*.fits tests/data/capture/*.fits ...
 
-Each line is one card, CONTINUE records joined into the card they continue: the index of its unit, the keyword, the
+The units of a compressed image give the header of their table. Each line is one card, CONTINUE records joined into the
+card they continue: the index of its unit, the keyword, the
 type of the value (bool, int, float, complex, str, undefined, or commentary for COMMENT, HISTORY and the blank keyword),
 the value, and the comment, separated by tabs. Integers are written in decimal, reals as the shortest text that reads
 back as the same double, complex values as their two parts, and the bytes of a header that are not ASCII as \\xHH.
@@ -49,7 +50,8 @@ def dump(path: Path):
     lines = []
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        with fits.open(path) as units:
+        # A compressed image as the table it is, whose header the reader gives for its unit.
+        with fits.open(path, disable_image_compression=True) as units:
             for index, unit in enumerate(units):
                 for card in unit.header.cards:
                     kind, value = value_of(card)

@@ -5,8 +5,11 @@
 // writes it as the primary HDU of a FITS file with keywords of its own: the target, the exposure with its unit, the
 // time of the observation and a HISTORY record. The library writes the structural keywords itself, BZERO = 32768 among
 // them, which stores unsigned 16-bit values (standard §5.2.5). A second unit holds the same frame converted to
-// floating point and scaled back into 16-bit integers, as programs that keep physical values do. The file is replaced
-// only once it is complete. The program then reads the file back and prints what it holds.
+// floating point and scaled back into 16-bit integers, as programs that keep physical values do. A third holds the
+// frame compressed with RICE_1 in tiles of 16 rows (standard §10.1): a binary table that a reader presents as the
+// image, its tiles decompressed as they are read. Every unit gets DATASUM and CHECKSUM (standard §4.4.2.7), which let a
+// reader verify it. The file is replaced only once it is complete. The program then reads the file back, verifies the
+// checksums of each unit, and prints what it holds; the reads of the whole images verify DATASUM as well.
 //
 // Usage: write_image <path>
 
@@ -54,6 +57,19 @@ std::vector<std::uint16_t> frame()
     return values;
 }
 
+std::string_view state_name(openfits::checksum_state state)
+{
+    switch (state) {
+    case openfits::checksum_state::valid:
+        return "valid";
+    case openfits::checksum_state::invalid:
+        return "invalid";
+    case openfits::checksum_state::absent:
+        break;
+    }
+    return "absent";
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -97,22 +113,40 @@ int main(int argc, char** argv)
         scaled.header.set("EXTNAME", "PHYSICAL");
         scaled.header.set("BUNIT", "adu/100");
         (void)output.add_image(scaled, std::span<const float>(physical));
-        output.save(path);
+        // The frame compressed, each tile of 16 rows alone, lossless for integers; in parallel in a build with oneTBB.
+        openfits::image_info packed = image;
+        packed.header.set("EXTNAME", "RICE");
+        (void)output.add_image(
+            packed, std::span<const std::uint16_t>(values),
+            {.compression = openfits::compression_options{.type = openfits::compression::rice, .tile = {width, 16}}});
+        // The checksums, with the time they were computed as their comment, again the application's.
+        output.save(path,
+                    {.checksums = true, .checksum_time = openfits::to_date_time(observed + std::chrono::hours{2})});
 
-        // Read back: the keywords, and some values of each unit.
+        // Read back: the keywords and the checksums of each unit, and some values.
         const openfits::reader file(path);
+        bool verified = true;
         for (const openfits::hdu_info& unit : file.hdus()) {
             std::cout << "HDU " << unit.index() << ":\n";
             for (const openfits::card& value : unit.header()) {
                 const std::string_view text = value.text();
                 std::cout << "  | " << text.substr(0, text.find_last_not_of(' ') + 1) << '\n';
             }
+            const openfits::checksum_report sums = file.verify(unit.index());
+            std::cout << "  DATASUM " << state_name(sums.datasum) << ", CHECKSUM " << state_name(sums.checksum) << '\n';
+            verified = verified && sums.datasum == openfits::checksum_state::valid &&
+                       sums.checksum == openfits::checksum_state::valid;
         }
         const std::vector<std::uint16_t> read = file.read_pixels<std::uint16_t>(0);
         std::cout << "values: " << read[0] << ' ' << read[(10 * width) + 12] << " (a star)\n";
         const std::vector<double> back = file.read_pixels<double>(file.hdu("PHYSICAL").index());
         std::cout << "physical values: " << back[0] << " (BLANK) " << back[(10 * width) + 12] << '\n';
-        return read == values ? 0 : 1;
+        const std::size_t rice = file.hdu("RICE").index();
+        const std::vector<std::uint16_t> unpacked = file.read_pixels<std::uint16_t>(rice);
+        std::cout << "compressed: " << file.hdu(rice).data_size().value_or(0) << " bytes of table for "
+                  << values.size() * 2 << " of values, " << (unpacked == values ? "read back as written" : "changed")
+                  << '\n';
+        return read == values && unpacked == values && verified ? 0 : 1;
     } catch (const std::exception& failure) {
         (void)std::fputs("write_image: ", stderr);
         (void)std::fputs(failure.what(), stderr);

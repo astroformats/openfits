@@ -10,6 +10,7 @@
 #include <openfits/reader.h>
 
 #include "support/fixture_builder.h"
+#include "support/table_fixtures.h"
 
 #include <gtest/gtest.h>
 
@@ -141,11 +142,11 @@ TEST(conformance_file_structure, extensions_have_the_kind_of_their_type)
     fixture file;
     file.primary();
     file.header(extension_records("IMAGE"));
-    file.header(extension_records("TABLE", 8, {10, 1}, 0, 1)).data(10);
-    file.header(extension_records("BINTABLE", 8, {8, 1}, 0, 1)).data(8);
-    file.header(with(extension_records("BINTABLE", 8, {8, 1}, 0, 1), {card_record("ZIMAGE", "T")})).data(8);
-    file.header(with(extension_records("BINTABLE", 8, {8, 1}, 0, 1), {card_record("ZTABLE", "T")})).data(8);
-    file.header(with(extension_records("BINTABLE", 8, {8, 1}, 0, 1), {card_record("ZIMAGE", "F")})).data(8);
+    file.header(openfits::test::ascii_table_records(10, 1, {{.column = 1, .format = "A10"}})).data(10);
+    file.header(openfits::test::bintable_records(8, 1, {"8A"})).data(8);
+    file.header(with(openfits::test::bintable_records(8, 1, {"8A"}), {card_record("ZIMAGE", "T")})).data(8);
+    file.header(with(openfits::test::bintable_records(8, 1, {"8A"}), {card_record("ZTABLE", "T")})).data(8);
+    file.header(with(openfits::test::bintable_records(8, 1, {"8A"}), {card_record("ZIMAGE", "F")})).data(8);
     const reader input = open(file);
     const std::vector<hdu_kind> kinds{
         hdu_kind::primary,          hdu_kind::image,   hdu_kind::table, hdu_kind::bintable, hdu_kind::compressed_image,

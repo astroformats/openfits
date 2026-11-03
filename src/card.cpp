@@ -4,6 +4,7 @@
 #include <openfits/card.h>
 #include <openfits/error.h>
 
+#include "core/ascii.h"
 #include "core/keyword_name.h"
 #include "core/value_text.h"
 #include "header/record.h"
@@ -122,6 +123,43 @@ card card::parse(std::string_view record)
     padded.resize(detail::record_length, ' ');
     std::vector<diagnostic> departures;
     return detail::parse_record(padded, departures);
+}
+
+card card::with_value_text(std::string_view keyword, std::string_view value_text, std::string_view comment)
+{
+    const std::string name = detail::canonical_keyword(keyword);
+    if (!detail::is_standard_keyword(name) || detail::is_commentary_keyword(name) || name == "CONTINUE" ||
+        name == "END") {
+        throw usage_error(errc::invalid_keyword,
+                          "the keyword '" + name + "' is not a name of standard §4.1.2.1 that has a value",
+                          {.keyword = name});
+    }
+    const std::string_view text = detail::trim_spaces(value_text);
+    if (!detail::is_printable(text) || !detail::is_printable(comment)) {
+        throw validation_error(errc::invalid_character,
+                               "the value text or the comment of '" + name +
+                                   "' holds a character outside printable ASCII",
+                               {.keyword = name});
+    }
+    // The record: the name, the value indicator, a string from byte 11 and any other value right-justified in bytes 11
+    // to 30 when it fits there, and the comment after " / ".
+    std::string record = name;
+    record.resize(8, ' ');
+    record += "= ";
+    if (!text.starts_with('\'') && text.size() < 20) {
+        record.append(20 - text.size(), ' ');
+    }
+    record += text;
+    if (!comment.empty()) {
+        record += " / ";
+        record += comment;
+    }
+    if (record.size() > detail::record_length) {
+        throw validation_error(errc::value_too_long,
+                               "the value text and the comment of '" + name + "' do not fit in a record",
+                               {.keyword = name});
+    }
+    return parse(record);
 }
 
 std::optional<std::string_view> card::unit() const noexcept

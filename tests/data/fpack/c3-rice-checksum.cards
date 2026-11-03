@@ -1,0 +1,40 @@
+0	SIMPLE	bool	T	file does conform to FITS standard
+0	BITPIX	int	16	number of bits per data pixel
+0	NAXIS	int	0	number of data axes
+0	EXTEND	bool	T	FITS dataset may contain extensions
+0	COMMENT	commentary	  FITS (Flexible Image Transport System) format is defined in 'Astronomy	
+0	COMMENT	commentary	  and Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H	
+0	CHECKSUM	str	1eG64Z941dE41Z94	HDU checksum updated 2026-11-02T14:47:37
+0	DATASUM	str	         0	data unit checksum updated 2026-11-02T14:47:37
+1	XTENSION	str	BINTABLE	binary table extension
+1	BITPIX	int	8	8-bit bytes
+1	NAXIS	int	2	2-dimensional binary table
+1	NAXIS1	int	8	width of table in bytes
+1	NAXIS2	int	23	number of rows in table
+1	PCOUNT	int	1035	size of special data area
+1	GCOUNT	int	1	one data group (required keyword)
+1	TFIELDS	int	1	number of fields in each row
+1	TTYPE1	str	COMPRESSED_DATA	label for field   1
+1	TFORM1	str	1PB(45)	data format of field: variable length array
+1	ZIMAGE	bool	T	extension contains compressed image
+1	ZTILE1	int	37	size of tiles to be compressed
+1	ZTILE2	int	1	size of tiles to be compressed
+1	ZCMPTYPE	str	RICE_1	compression algorithm
+1	ZNAME1	str	BLOCKSIZE	compression block size
+1	ZVAL1	int	32	pixels per block
+1	ZNAME2	str	BYTEPIX	bytes per pixel (1, 2, 4, or 8)
+1	ZVAL2	int	2	bytes per pixel (1, 2, 4, or 8)
+1	EXTNAME	str	COMPRESSED_IMAGE	
+1	ZSIMPLE	bool	T	conforms to FITS standard
+1	ZBITPIX	int	16	array data type
+1	ZNAXIS	int	2	number of array dimensions
+1	ZNAXIS1	int	37	
+1	ZNAXIS2	int	23	
+1	ZEXTEND	bool	T	
+1	BSCALE	int	1	
+1	BZERO	int	32768	
+1	OBJECT	str	pattern	the pattern image of the samples
+1	ZHECKSUM	str	YAAib92hZA9ha99h	2026-11-02T00:00:00
+1	ZDATASUM	str	4294901802	2026-11-02T00:00:00
+1	CHECKSUM	str	ZNiagLiUZLiadLiU	HDU checksum updated 2026-11-02T14:47:37
+1	DATASUM	str	2822593505	data unit checksum updated 2026-11-02T14:47:37

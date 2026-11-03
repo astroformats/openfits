@@ -27,11 +27,14 @@ struct emission_options
     bool longstrn = false;
     /// Blank records before END: the fill space that later changes of the header take (standard §4.4.2.4).
     std::size_t reserved_cards = 0;
+    /// Cards of the writer after those of the caller: those of the checksums, which come last (standard §4.4.2.7).
+    std::span<const card> closing{};
 };
 
 /// The blocks of a header: the records of the structural cards; LONGSTRN when options ask for it; the records of the
-/// caller's cards, its fill space left out, as card_records() makes them; options.reserved_cards blank records; END;
-/// and spaces to the end of the last block (standard §3.1). A card read from a file is its own record.
+/// caller's cards, its fill space left out, as card_records() makes them; those of options.closing;
+/// options.reserved_cards blank records; END; and spaces to the end of the last block (standard §3.1). A card read
+/// from a file is its own record.
 /// @throws validation_error with errc::structural_keyword for a structural keyword among the caller's cards, which the
 ///         writer makes from the model, and the errors of card_records().
 [[nodiscard]] std::string header_blocks(std::span<const card> structural, const header& caller,

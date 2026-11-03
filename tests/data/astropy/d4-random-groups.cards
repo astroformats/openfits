@@ -1,0 +1,19 @@
+0	SIMPLE	bool	T	conforms to FITS standard
+0	BITPIX	int	32	array data type
+0	NAXIS	int	4	number of array dimensions
+0	NAXIS1	int	0	
+0	NAXIS2	int	7	
+0	NAXIS3	int	5	
+0	NAXIS4	int	1	
+0	EXTEND	bool	T	
+0	GROUPS	bool	T	has groups
+0	PCOUNT	int	4	number of parameters
+0	GCOUNT	int	3	number of groups
+0	PTYPE1	str	UU	
+0	PTYPE2	str	VV	
+0	PTYPE3	str	DATE	
+0	PTYPE4	str	DATE	
+0	PSCAL1	float	1e-09	scale of UU
+0	PZERO3	float	2460000.5	the day of the date
+0	PSCAL4	float	0.001	the fraction of the day
+0	OBJECT	str	random groups	the sample D4
