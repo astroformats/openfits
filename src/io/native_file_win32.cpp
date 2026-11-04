@@ -297,6 +297,30 @@ std::optional<native_file> native_file::create_new(const std::string& path, std:
     return native_file(handle, std::move(name));
 }
 
+std::optional<native_file> native_file::create_scratch(const std::string& path)
+{
+    const std::wstring wide = system_path(path);
+    if (wide.empty()) {
+        const std::error_code error = last_error();
+        fail(errc::open_failed, "cannot create the temporary file " + path, error);
+    }
+    // The system deletes the file once its last handle is closed, by the process or at its end. Others may read it
+    // while it exists, as a scanner of the system does, but only with FILE_SHARE_DELETE, which keeps the deletion
+    // possible. A link at the name is not followed, and counts as a taken name, as in create_new().
+    HANDLE handle = CreateFileW(
+        wide.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, CREATE_NEW,
+        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        const std::error_code error = last_error();
+        if (error.value() == ERROR_FILE_EXISTS || error.value() == ERROR_ALREADY_EXISTS ||
+            (error.value() == ERROR_ACCESS_DENIED && is_directory(wide))) {
+            return std::nullopt;
+        }
+        fail(errc::open_failed, "cannot create the temporary file " + path, error);
+    }
+    return native_file(handle, path);
+}
+
 std::uint64_t native_file::size() const
 {
     LARGE_INTEGER size{};

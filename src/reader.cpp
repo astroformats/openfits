@@ -11,6 +11,8 @@
 #include "data/image_description.h"
 #include "data/image_read.h"
 #include "data/random_groups.h"
+#include "hdu/copy.h"
+#include "hdu/header_reader.h"
 #include "hdu/section.h"
 #include "hdu/walk.h"
 #include "table/column_read.h"
@@ -18,12 +20,15 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <map>
 #include <mutex>
+#include <span>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace openfits {
 
@@ -81,6 +86,38 @@ bool holds_table(const hdu_info& unit)
     throw usage_error(errc::hdu_not_found, "the file has no " + what);
 }
 
+// The file of a reader: its source, or the content that the source inflates to when it starts with the bytes of a gzip
+// member (RFC 1952, §2.3.1), a convention outside the standard, since a FITS file starts with SIMPLE; and the first
+// bytes of a source that is not in memory, read to tell, which the walk takes as the first read of the primary header.
+struct opened_file
+{
+    std::unique_ptr<input_source> source{};
+    std::vector<std::byte> start{};
+};
+
+opened_file content_of(std::unique_ptr<input_source> source, const read_options& options)
+{
+    opened_file file;
+    if (source == nullptr || source->size() < 2) {
+        file.source = std::move(source);
+        return file;
+    }
+    std::span<const std::byte> first = source->bytes();
+    if (first.size() != source->size()) {
+        const std::size_t probe = std::min(source->size(), detail::first_header_read);
+        file.start.resize(probe);
+        source->read(0, file.start);
+        first = file.start;
+    }
+    if (first[0] != std::byte{0x1F} || first[1] != std::byte{0x8B}) {
+        file.source = std::move(source);
+        return file;
+    }
+    file.source = std::make_unique<gzip_source>(*source, options.limits, options.inflate);
+    file.start.clear();
+    return file;
+}
+
 // The table of a unit as the reads of its columns take it: the unit itself and the source, or for a compressed table
 // (standard §10.3) the table that it holds, its data decompressed into memory.
 class table_view
@@ -122,8 +159,8 @@ private:
 
 struct reader::state
 {
-    state(std::unique_ptr<input_source> source, const read_options& options)
-        : walk(std::move(source), options.limits, options.strict), limits(options.limits)
+    state(opened_file file, const read_options& options)
+        : walk(std::move(file.source), options.limits, options.strict, file.start), limits(options.limits)
     {}
 
     // The description of the compressed image of unit, made by its first read and kept for the others: a read of a row
@@ -155,10 +192,17 @@ struct reader::state
     std::map<std::size_t, detail::compressed_image> descriptions{};
 };
 
-reader::reader(std::string_view path, read_options options) : reader(std::make_unique<file_source>(path), options) {}
+const detail::thread_safe_source& detail::reader_access::source(const reader& file) noexcept
+{
+    return file.state_->walk.source();
+}
 
-reader::reader(std::unique_ptr<input_source> source, read_options options)
-    : state_(std::make_unique<state>(std::move(source), options))
+reader::reader(std::string_view path, const read_options& options)
+    : reader(std::make_unique<file_source>(path), options)
+{}
+
+reader::reader(std::unique_ptr<input_source> source, const read_options& options)
+    : state_(std::make_unique<state>(content_of(std::move(source), options), options))
 {
     if (options.strict) {
         // A strict open walks every unit, and verifies each against its checksums: a unit without them is not read.
@@ -176,7 +220,8 @@ reader::reader(std::unique_ptr<input_source> source, read_options options)
     }
 }
 
-reader::reader(const file_specification& specification, read_options options) : reader(specification.path, options)
+reader::reader(const file_specification& specification, const read_options& options)
+    : reader(specification.path, options)
 {
     std::size_t selected = 0;
     if (specification.hdu_index) {

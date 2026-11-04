@@ -89,4 +89,10 @@ numeric_type image_info::value_type() const
     return numeric_type::float64;
 }
 
+image_info without_structural(image_info image)
+{
+    image.header = without_structural(image.header);
+    return image;
+}
+
 } // namespace openfits

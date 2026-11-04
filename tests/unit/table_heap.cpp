@@ -48,7 +48,7 @@ using openfits::test::fixture;
 using openfits::test::throws;
 using openfits::test::with;
 
-reader open(const fixture& file, openfits::read_options options = {})
+reader open(const fixture& file, const openfits::read_options& options = {})
 {
     return reader(std::make_unique<openfits::memory_source>(std::vector<std::byte>(file.bytes())), options);
 }

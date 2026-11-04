@@ -10,6 +10,7 @@
 
 #include "compress/image_tiles.h"
 #include "data/conversion.h"
+#include "data/image_write.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -49,15 +50,17 @@ struct compressed_unit
 void check_compression(const compression_options& options, bitpix stored, std::span<const std::uint64_t> axes,
                        std::uint64_t hdu);
 
-/// Compresses the image of a model of the writer, whose values of type are data, which conversion converts into its
-/// stored values, as the unit hdu: the primary HDU when primary, whose table then has ZSIMPLE and, without an EXTNAME
-/// in its header, the name COMPRESSED_IMAGE. advance receives the bytes of the stored values of each batch of tiles
-/// compressed, on the calling thread.
+/// Compresses the image of a model of the writer, whose values of type values gives, which conversion converts into
+/// its stored values, as the unit hdu: the primary HDU when primary, whose table then has ZSIMPLE and, without an
+/// EXTNAME in its header, the name COMPRESSED_IMAGE. The tiles are compressed in batches of whole bands, the runs of
+/// elements that hold whole tiles, rows for an image of two axes or more, each batch of at most 64 MiB of stored values
+/// but for a band larger, whose values are taken from values in one call. advance receives the bytes of the stored
+/// values of each batch of tiles compressed, on the calling thread.
 /// @throws the exceptions of check_compression(), of convert_write(), and validation_error
 ///         (errc::invalid_compression) for values that the algorithm cannot compress: PLIO_1 values beyond 0 to 2^24 -
 ///         1, or a tile that cannot be quantized without lossless_fallback.
 [[nodiscard]] compressed_unit compress_image(const image_info& image, const write_conversion& conversion,
-                                             numeric_type type, std::span<const std::byte> data,
+                                             numeric_type type, const image_values& values,
                                              const compression_options& options, bool primary, std::uint64_t hdu,
                                              const std::function<void(std::uint64_t)>& advance);
 

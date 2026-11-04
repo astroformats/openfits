@@ -76,6 +76,9 @@ struct sample
     /// The codes of the departures from the standard that the reader reports in its headers, each a warning or an
     /// info; any other diagnostic is a failure.
     std::vector<errc> departures{};
+    /// The codes of the departures that verify() finds beyond those of its headers: of its data, which reads do not
+    /// check, and conventions outside the standard; each a warning or an info, and each found.
+    std::vector<errc> report_departures{};
 };
 
 /// Every sample.
@@ -86,6 +89,10 @@ struct sample
 
 /// The UTF-8 path of the file of a sample.
 [[nodiscard]] std::string sample_path(const sample& unit);
+
+/// The bytes of the FITS file of a sample: those of its file, inflated by gzip_source when they are compressed with
+/// gzip.
+[[nodiscard]] std::string sample_content(const sample& unit);
 
 /// GoogleTest prints the parameter in messages, and CTest names the test after it: the id. The name is fixed by
 /// GoogleTest.

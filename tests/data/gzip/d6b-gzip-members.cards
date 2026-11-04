@@ -1,0 +1,36 @@
+0	SIMPLE	bool	T	conforms to FITS standard
+0	BITPIX	int	8	array data type
+0	NAXIS	int	0	number of array dimensions
+0	EXTEND	bool	T	
+0	ORIGIN	str	OpenFITS samples	an empty primary HDU
+1	XTENSION	str	IMAGE	Image extension
+1	BITPIX	int	16	array data type
+1	NAXIS	int	2	number of array dimensions
+1	NAXIS1	int	37	
+1	NAXIS2	int	23	
+1	PCOUNT	int	0	number of parameters
+1	GCOUNT	int	1	number of groups
+1	BSCALE	int	1	
+1	BZERO	int	32768	
+1	EXTNAME	str	SCI	extension name
+1	EXTVER	int	1	extension value
+1	FILTER	str	L	the first image
+2	XTENSION	str	IMAGE	Image extension
+2	BITPIX	int	-32	array data type
+2	NAXIS	int	2	number of array dimensions
+2	NAXIS1	int	37	
+2	NAXIS2	int	23	
+2	PCOUNT	int	0	number of parameters
+2	GCOUNT	int	1	number of groups
+2	EXTNAME	str	SCI	extension name
+2	EXTVER	int	2	extension value
+2	GAIN	float	1.25	[e-/ADU] the second image
+3	XTENSION	str	IMAGE	Image extension
+3	BITPIX	int	8	array data type
+3	NAXIS	int	2	number of array dimensions
+3	NAXIS1	int	11	
+3	NAXIS2	int	7	
+3	PCOUNT	int	0	number of parameters
+3	GCOUNT	int	1	number of groups
+3	EXTNAME	str	MASK	extension name
+3	MASKED	bool	T	the mask

@@ -58,17 +58,22 @@ diagnostic first_error(const hdu_info& unit)
     }
     return {.severity = severity::error,
             .code = errc::invalid_structure,
+            .section = "4.4.1",
             .message = "the header of the unit gives no size for its data",
             .context = {.hdu = unit.index()}};
 }
 
 } // namespace
 
-unit_walk::unit_walk(std::unique_ptr<input_source> source, const limits& limits, bool strict)
+unit_walk::unit_walk(std::unique_ptr<input_source> source, const limits& limits, bool strict,
+                     std::span<const std::byte> start)
     : source_(std::move(source)), limits_(limits), strict_(strict), log_(strict, limits.max_diagnostics)
 {
     if (source_.size() == 0) {
         throw invalid_data_error(errc::not_a_fits_file, "the file is empty, and holds no primary header");
+    }
+    if (!start.empty() && start.size() <= source_.size()) {
+        window_.prime(0, start);
     }
     const std::scoped_lock lock(mutex_);
     walk_next();
@@ -124,14 +129,18 @@ std::vector<diagnostic> unit_walk::diagnostics() const
     return log_.entries();
 }
 
-void unit_walk::stop(errc code, const std::string& message, error_context context)
+void unit_walk::stop(errc code, std::string_view section, const std::string& message, error_context context)
 {
     ended_ = true;
-    stop_ = diagnostic{.severity = severity::error, .code = code, .message = message, .context = context};
+    stop_ = diagnostic{.severity = severity::error,
+                       .code = code,
+                       .section = std::string(section),
+                       .message = message,
+                       .context = context};
     if (units_.empty()) {
         throw_file_error(code, message, std::move(context));
     }
-    log_.error(code, message, std::move(context));
+    log_.error(code, section, message, std::move(context));
 }
 
 bool unit_walk::walk_next()
@@ -146,7 +155,7 @@ bool unit_walk::walk_next()
         return false;
     }
     if (limits_.max_hdus != 0 && index >= limits_.max_hdus) {
-        stop(errc::too_many_hdus, "the file has more units than the limit of " + std::to_string(limits_.max_hdus),
+        stop(errc::too_many_hdus, "", "the file has more units than the limit of " + std::to_string(limits_.max_hdus),
              {.hdu = index, .offset = offset});
         return false;
     }
@@ -163,7 +172,7 @@ bool unit_walk::walk_next()
                                      "the file does not start with the SIMPLE keyword of a primary header",
                                      {.offset = 0});
         }
-        log_.warning(errc::special_records,
+        log_.warning(errc::special_records, "3.5",
                      "the " + std::to_string(source_.size() - offset) +
                          " bytes after the last unit are not a header: special records or other data, which are "
                          "ignored",
@@ -173,12 +182,12 @@ bool unit_walk::walk_next()
     }
     if (read.outcome == header_outcome::too_large) {
         const diagnostic error = log.entries().back();
-        stop(error.code, error.message, error.context);
+        stop(error.code, error.section, error.message, error.context);
         return false;
     }
     const std::optional<std::uint64_t> header_bytes = add(header_bytes_, read.size);
     if (limits_.max_total_header_bytes != 0 && (!header_bytes || *header_bytes > limits_.max_total_header_bytes)) {
-        stop(errc::header_too_large,
+        stop(errc::header_too_large, "",
              "the headers of the file are longer than the limit of " + std::to_string(limits_.max_total_header_bytes) +
                  " bytes",
              {.hdu = index, .offset = offset});
@@ -199,7 +208,7 @@ bool unit_walk::walk_next()
         const header& primary = units_.front().header();
         const std::optional<std::size_t> extend = primary.index_of("EXTEND");
         if (extend && primary[*extend].value().kind() == value_kind::logical && !primary[*extend].value().get<bool>()) {
-            log_.warning(errc::reserved_keyword,
+            log_.warning(errc::reserved_keyword, "4.4.2.1",
                          "EXTEND is F in the primary header, and the file has extensions, which are read",
                          {.hdu = 0, .keyword = "EXTEND"});
         }
@@ -214,13 +223,13 @@ bool unit_walk::walk_next()
     if (!next || *next > source_.size()) {
         // A truncated last unit: the data that the file holds are read, and the walk ends.
         if (!data_end || *data_end > source_.size()) {
-            log_.warning(errc::truncated_file,
+            log_.warning(errc::truncated_file, "3.1",
                          "the file ends before the end of the data of the unit, of which " +
                              std::to_string(source_.size() - data_offset) + " bytes of " + std::to_string(*data_size) +
                              " are present",
                          {.hdu = index, .offset = source_.size()});
         } else {
-            log_.warning(errc::truncated_file,
+            log_.warning(errc::truncated_file, "3.1",
                          "the file ends within the fill of the last block of the data of the unit",
                          {.hdu = index, .offset = source_.size()});
         }

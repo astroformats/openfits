@@ -188,6 +188,11 @@ struct table_info
 #pragma warning(pop)
 #endif
 
+/// The model of a table read from a file, for the writer: table with the structural cards of its header taken out
+/// (without_structural()), its kind, rows and columns kept, the format, dimensions, scaling, null and display of each,
+/// so that a table read is written again in one line: writer.add_table(without_structural(file.table(index)), values).
+[[nodiscard]] OPENFITS_API table_info without_structural(table_info table);
+
 /// The rows of a table that a read takes: count rows from the row first, counted from 0; the rest of the table when
 /// count is empty.
 struct row_range

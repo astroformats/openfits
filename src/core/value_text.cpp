@@ -47,9 +47,14 @@ std::size_t skip_spaces(std::string_view text, std::size_t from) noexcept
     return from;
 }
 
-void depart(std::vector<diagnostic>& departures, severity level, errc code, std::string message)
+void depart(std::vector<diagnostic>& departures, severity level, errc code, std::string_view section,
+            std::string message)
 {
-    departures.push_back({.severity = level, .code = code, .message = std::move(message), .context = {}});
+    departures.push_back({.severity = level,
+                          .code = code,
+                          .section = std::string(section),
+                          .message = std::move(message),
+                          .context = {}});
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -178,7 +183,7 @@ std::size_t read_string(std::string_view field, std::size_t begin, card_value& v
         ++i;
     }
     if (!closed) {
-        depart(departures, severity::warning, errc::invalid_string,
+        depart(departures, severity::warning, errc::invalid_string, "4.2.1.1",
                "a string has no closing quote, and runs to the end of the record");
     }
     // Trailing spaces are not significant, but the first space of a string of spaces is: ' ' is the empty string, one
@@ -193,7 +198,7 @@ std::optional<card_value> complex_part(std::string_view part, bool want_integer,
 {
     const scanned_number scanned = scan_number(part);
     if (scanned.lowercase_exponent) {
-        depart(departures, severity::warning, errc::invalid_real,
+        depart(departures, severity::warning, errc::invalid_real, "4.2.4",
                "the exponent letter of " + quote(part) + " is in lower case");
     }
     if (want_integer) {
@@ -214,7 +219,7 @@ std::size_t read_complex(std::string_view field, std::size_t begin, card_value& 
     if (close == std::string_view::npos) {
         const std::size_t slash = std::min(field.find('/', begin), field.size());
         const std::string_view text = trim_trailing_spaces(field.substr(begin, slash - begin));
-        depart(departures, severity::warning, errc::invalid_complex,
+        depart(departures, severity::warning, errc::invalid_complex, "4.2.5",
                "the complex value " + quote(text) + " has no closing parenthesis");
         return begin + text.size();
     }
@@ -227,7 +232,7 @@ std::size_t read_complex(std::string_view field, std::size_t begin, card_value& 
     const scanned_number imag_scan = scan_number(imag_part);
     if (comma == std::string_view::npos || real_scan.form == number_form::not_a_number ||
         imag_scan.form == number_form::not_a_number) {
-        depart(departures, severity::warning, errc::invalid_complex,
+        depart(departures, severity::warning, errc::invalid_complex, "4.2.5",
                quote(field.substr(begin, close + 1 - begin)) + " is not a complex value");
         return close + 1;
     }
@@ -239,7 +244,7 @@ std::size_t read_complex(std::string_view field, std::size_t begin, card_value& 
     if (!real || !imag ||
         (integers && (!std::holds_alternative<std::int64_t>(real->data()) ||
                       !std::holds_alternative<std::int64_t>(imag->data())))) {
-        depart(departures, severity::warning, errc::value_out_of_range,
+        depart(departures, severity::warning, errc::value_out_of_range, "",
                "a part of the complex value " + quote(field.substr(begin, close + 1 - begin)) + " is out of range");
         return close + 1;
     }
@@ -259,7 +264,7 @@ void read_token(std::string_view token, card_value& value, std::vector<diagnosti
         return;
     }
     if (token == "t" || token == "f") {
-        depart(departures, severity::warning, errc::invalid_logical, "a logical value is in lower case");
+        depart(departures, severity::warning, errc::invalid_logical, "4.2.2", "a logical value is in lower case");
         value = token == "t";
         return;
     }
@@ -269,26 +274,28 @@ void read_token(std::string_view token, card_value& value, std::vector<diagnosti
         if (const std::optional<card_value> integer = integer_value(token)) {
             value = *integer;
         } else {
-            depart(departures, severity::warning, errc::value_out_of_range,
+            // The standard limits neither integers nor reals (§4.2.3, §4.2.4): a number beyond the types of the library
+            // departs from no section.
+            depart(departures, severity::warning, errc::value_out_of_range, "",
                    "the integer " + quote(token) + " is beyond -2^63 to 2^64 - 1");
         }
         return;
     case number_form::real:
         if (scanned.lowercase_exponent) {
-            depart(departures, severity::warning, errc::invalid_real,
+            depart(departures, severity::warning, errc::invalid_real, "4.2.4",
                    "the exponent letter of " + quote(token) + " is in lower case");
         }
         if (const std::optional<double> real = real_value(token)) {
             value = *real;
         } else {
-            depart(departures, severity::warning, errc::value_out_of_range,
+            depart(departures, severity::warning, errc::value_out_of_range, "",
                    "the real " + quote(token) + " is beyond the range of double");
         }
         return;
     case number_form::not_a_number:
         break;
     }
-    depart(departures, severity::warning, errc::invalid_value,
+    depart(departures, severity::warning, errc::invalid_value, "4.2",
            quote(token) + " is none of the forms of keyword values");
 }
 
@@ -447,7 +454,7 @@ value_field read_value_field(std::string_view field, bool at_byte_11, std::vecto
         if (field[next] == '/') {
             result.comment = comment_text(field.substr(next + 1));
         } else {
-            depart(departures, severity::warning, errc::invalid_comment,
+            depart(departures, severity::warning, errc::invalid_comment, "4.1.2.3",
                    "the text after the value, " + quote(field.substr(next)) + ", does not start with a slash");
             result.comment = std::string(trim_trailing_spaces(field.substr(next)));
         }
@@ -489,9 +496,9 @@ std::string format_real(double value)
     return text;
 }
 
-std::string format_string(std::string_view value)
+std::string format_string(std::string_view value, bool any_bytes)
 {
-    if (!is_printable(value)) {
+    if (!any_bytes && !is_printable(value)) {
         throw validation_error(errc::invalid_character,
                                "the string " + quote(value) + " holds a character outside printable ASCII");
     }
@@ -516,7 +523,7 @@ std::string format_string(std::string_view value)
     return text;
 }
 
-std::string format_value(const card_value& value)
+std::string format_value(const card_value& value, bool any_bytes)
 {
     switch (value.kind()) {
     case value_kind::undefined:
@@ -539,11 +546,42 @@ std::string format_value(const card_value& value)
         return '(' + format_real(number.real()) + ", " + format_real(number.imag()) + ')';
     }
     case value_kind::string:
-        return format_string(value.get<std::string>());
+        return format_string(value.get<std::string>(), any_bytes);
     case value_kind::none:
         break;
     }
     throw validation_error(errc::invalid_value, "a keyword with a value indicator has no value to write");
+}
+
+card_value value_of_text(std::string_view text)
+{
+    std::vector<diagnostic> departures;
+    value_field field = read_value_field(text, false, departures);
+    // A slash after the value would have been read as the start of a comment, and other text after it as one.
+    if (field.value_end != text.size()) {
+        return {};
+    }
+    return std::move(field.value);
+}
+
+void check_value_text(std::string_view text, bool any_bytes)
+{
+    std::vector<diagnostic> departures;
+    const value_field field = read_value_field(text, false, departures);
+    for (const diagnostic& departure : departures) {
+        if (departure.code != errc::invalid_character) {
+            throw validation_error(departure.code,
+                                   "the value text " + quote(text) + " is not of standard §4.2: " + departure.message);
+        }
+    }
+    if (field.value.kind() == value_kind::none || field.value_end != text.size()) {
+        throw validation_error(errc::invalid_value,
+                               "the value text " + quote(text) + " is not one value of the forms of standard §4.2");
+    }
+    if (!any_bytes && !is_printable(text)) {
+        throw validation_error(errc::invalid_character,
+                               "the value text " + quote(text) + " holds a character outside printable ASCII");
+    }
 }
 
 } // namespace openfits::detail

@@ -101,4 +101,9 @@ struct groups_info
 #pragma warning(pop)
 #endif
 
+/// The model of an image read from a file, for the writer: image with the structural cards of its header taken out
+/// (without_structural()), its BITPIX, axes, scaling and BLANK kept, so that an image read is written again in one
+/// line: writer.add_image(without_structural(file.image(index)), values).
+[[nodiscard]] OPENFITS_API image_info without_structural(image_info image);
+
 } // namespace openfits

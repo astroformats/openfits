@@ -153,6 +153,18 @@ TEST(memory_sink, reserves_room_for_the_bytes_to_come)
                                               [&] { sink.reserve(std::numeric_limits<std::uint64_t>::max()); }));
 }
 
+TEST(memory_sink, makes_its_buffer_longer_for_zeros)
+{
+    memory_sink sink;
+    sink.write(bytes("abc"));
+    sink.write_zeros(5);
+    sink.write(bytes("d"));
+    EXPECT_EQ(text(std::vector<std::byte>(sink.data().begin(), sink.data().end())), std::string("abc\0\0\0\0\0d", 9));
+    EXPECT_TRUE(throws<openfits::limit_error>(openfits::errc::allocation_too_large,
+                                              [&] { sink.write_zeros(std::numeric_limits<std::uint64_t>::max()); }));
+    EXPECT_EQ(sink.position(), 9U);
+}
+
 TEST(memory_sink, release_moves_the_bytes_out)
 {
     memory_sink sink;

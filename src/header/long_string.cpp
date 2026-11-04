@@ -88,11 +88,10 @@ std::vector<std::string> long_string_records(std::string_view keyword, std::stri
                                    " is longer than a record holds, and CONTINUE must not continue a reserved keyword",
                                where);
     }
-    if (!is_printable(value) || !is_printable(comment)) {
-        throw validation_error(
-            errc::invalid_character,
-            "the string or the comment of " + quote(name) + " holds a character outside printable ASCII", where);
-    }
+    const std::string written_value = ascii_text(value, options, where, "the string");
+    const std::string written_comment = ascii_text(comment, options, where, "the comment");
+    value = written_value;
+    comment = written_comment;
     // The first record holds the string between quotes after "NAME    = " or "HIERARCH NAME = ", and its piece needs
     // eight characters at least, to which the writer pads strings.
     const std::size_t prefix = is_standard_keyword(name) ? 10 : 9 + name.size() + 3;
@@ -191,7 +190,7 @@ std::string joined_comment(std::span<const card> cards, std::size_t index)
 std::vector<std::string> card_records(const card& value, const record_options& options)
 {
     if (!value.text().empty()) {
-        return {std::string(value.text())};
+        return {write_record(value, options)};
     }
     try {
         return {write_record(value, options)};

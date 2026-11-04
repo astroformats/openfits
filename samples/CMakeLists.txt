@@ -33,3 +33,21 @@ openfits_add_sample(convert "${PROJECT_SOURCE_DIR}/tests/data/fpack/b1-u16-rice.
                     "${CMAKE_CURRENT_BINARY_DIR}/convert.fits" -32 gzip2 4)
 openfits_add_sample(compress "${PROJECT_SOURCE_DIR}/tests/data/astropy/a13-mef.fits"
                     "${CMAKE_CURRENT_BINARY_DIR}/compress.fits" rice)
+openfits_add_sample(copy_hdu "${CMAKE_CURRENT_BINARY_DIR}/copy_hdu.fits"
+                    "${PROJECT_SOURCE_DIR}/tests/data/astropy/a13-mef.fits"
+                    "${PROJECT_SOURCE_DIR}/tests/data/astropy/d2-bintable.fits" "ORIGIN='the sample copy_hdu'")
+openfits_add_sample(verify "${PROJECT_SOURCE_DIR}/tests/data/astropy/d3-ascii-table.fits"
+                    "${PROJECT_SOURCE_DIR}/tests/data/gzip/d6-gzip.fits.gz")
+
+# The files that the samples write conform to the standard: their report holds no finding, whose line would fail it.
+set(writing_samples write_image stream_io convert compress copy_hdu)
+set(written_by_samples)
+foreach(name IN LISTS writing_samples)
+    set_tests_properties(example.${name} PROPERTIES FIXTURES_SETUP sample_files)
+    list(APPEND written_by_samples "${CMAKE_CURRENT_BINARY_DIR}/${name}.fits")
+endforeach()
+add_test(NAME example.verify_written_files COMMAND verify ${written_by_samples})
+set_tests_properties(example.verify_written_files PROPERTIES
+    LABELS example
+    FIXTURES_REQUIRED sample_files
+    FAIL_REGULAR_EXPRESSION ": (error|warning|info): ")

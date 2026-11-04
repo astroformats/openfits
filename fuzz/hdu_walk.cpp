@@ -4,12 +4,14 @@
 // A file of many hostile units built from the input (standard §3, §4.4.1): every four bytes describe one unit, its
 // type, BITPIX, axes, counts, name, and the ways it departs from the standard, so that the fuzzer reaches deep walks
 // without writing blocks. The walk under small limits must give the units in order, each after the data of the one
-// before, the same by index, by name and by count. A failure must be an error of the library's kinds; any other
-// exception escapes and fails the run.
+// before, the same by index, by name and by count; and the conformance report of verify() must hold every diagnostic of
+// the walk, each of a unit that the walk reached, without an exception. A failure must be an error of the library's
+// kinds; any other exception escapes and fails the run.
 
 #include <openfits/error.h>
 #include <openfits/io.h>
 #include <openfits/reader.h>
+#include <openfits/verify.h>
 
 #include <algorithm>
 #include <array>
@@ -201,6 +203,18 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
             break;
         }
         next = unit.data_offset() + ((*unit.data_size() + 2879) / 2880 * 2880);
+    }
+
+    // The report holds the diagnostics of the walk and of the headers, and those of its own checks, each of a unit of
+    // the file or of none; its checks throw nothing over a source in memory.
+    const std::vector<openfits::diagnostic> report = openfits::verify(*input);
+    std::size_t walked = input->diagnostics().size();
+    for (const hdu_info& unit : units) {
+        walked += unit.diagnostics().size();
+    }
+    require(report.size() >= walked);
+    for (const openfits::diagnostic& finding : report) {
+        require(!finding.context.hdu || *finding.context.hdu <= units.size());
     }
     return 0;
 }

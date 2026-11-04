@@ -4,6 +4,7 @@
 #pragma once
 
 #include <openfits/export.h>
+#include <openfits/limits.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -81,6 +82,11 @@ public:
 
     /// Appends data, or throws io_error.
     virtual void write(std::span<const std::byte> data) = 0;
+
+    /// Appends count zero bytes, as write() of as many zeros does: the empty data that a writer reserves for later.
+    /// The default implementation writes them through write(), in pieces of at most 1 MiB; file_sink makes its file
+    /// longer instead, which the system fills with zeros without writing them, and memory_sink makes its buffer longer.
+    virtual void write_zeros(std::uint64_t count);
 
     /// Number of bytes written so far, which is the offset of the next one.
     [[nodiscard]] virtual std::uint64_t position() const = 0;
@@ -205,6 +211,10 @@ public:
     ~file_sink() override;
 
     void write(std::span<const std::byte> data) override;
+    /// Makes the file longer, which the system fills with zeros: without writing them where the file system allows
+    /// it, in a sparse file.
+    /// @throws io_error (errc::write_failed) when the system refuses the size.
+    void write_zeros(std::uint64_t count) override;
     [[nodiscard]] std::uint64_t position() const override;
     /// True.
     [[nodiscard]] bool can_rewrite() const override;
@@ -287,6 +297,9 @@ class OPENFITS_API memory_sink final : public output_sink
 {
 public:
     void write(std::span<const std::byte> data) override;
+    /// Makes the buffer longer by count zeros.
+    /// @throws limit_error (errc::allocation_too_large) when the bytes do not fit in memory, and std::bad_alloc.
+    void write_zeros(std::uint64_t count) override;
     [[nodiscard]] std::uint64_t position() const override;
     /// True.
     [[nodiscard]] bool can_rewrite() const override;
@@ -402,6 +415,85 @@ private:
     rewrite_function rewrite_;
     finish_function finish_;
     std::uint64_t position_ = 0;
+};
+
+/// Where the content of a gzip-compressed file goes once inflated (gzip_source).
+struct inflate_options
+{
+    /// A directory for a temporary file that holds a content larger than memory_threshold, as UTF-8; none when empty.
+    /// The library never takes one from the environment. The file is created there under a name of its own,
+    /// `.openfits-<16 hexadecimal digits>.tmp`, and removed when the source is destroyed or the process ends, even
+    /// abruptly. A hostile file can fill it with up to 1032 times its own size, which is as much as deflate inflates.
+    std::string temporary_directory{};
+    /// With a temporary directory, the most bytes of content that the source holds in memory: a larger content goes to
+    /// the temporary file, whatever limits::max_inflated_bytes says.
+    std::uint64_t memory_threshold = std::uint64_t{256} << 20;
+};
+
+/// The content of a gzip-compressed file (RFC 1952), such as `M31.fits.gz`, a convention outside the FITS standard:
+/// the source inflates the file once, when it is made, since a gzip stream cannot be read from the middle, and then
+/// reads its content as a memory_source does, or as a file_source does when a temporary file holds it. A reader
+/// makes one by itself for a file that starts with the bytes 1f 8b of a gzip member, whatever its name.
+///
+/// Every member of the file is inflated, one after the other, as gzip(1) inflates them, and each is checked against
+/// its CRC-32 and its length; zero bytes after the last member are ignored, as the padding of a tape. Any number of
+/// threads can read the content at once.
+class OPENFITS_API gzip_source final : public input_source
+{
+public:
+    /// Inflates the gzip file that compressed holds, which is read once here and not kept. Its content goes into
+    /// memory, up to limits.max_inflated_bytes and limits.max_allocation, or with a temporary directory in options,
+    /// into a temporary file there once it is larger than options.memory_threshold.
+    /// @throws integrity_error (errc::corrupt_compressed_data) when compressed holds no gzip member, a member that is
+    ///         corrupt or does not match its CRC-32 or its length, bytes after the last member that are neither zeros
+    ///         nor a member, or ends within a member.
+    /// @throws limit_error (errc::inflated_too_large) when the content is larger than limits.max_inflated_bytes, and
+    ///         (errc::allocation_too_large) than limits.max_allocation, without a temporary directory.
+    /// @throws usage_error when the temporary directory is not valid UTF-8; io_error when the temporary file cannot be
+    ///         created or written; and the exceptions of compressed.
+    explicit gzip_source(const input_source& compressed, const limits& limits = {},
+                         const inflate_options& options = {});
+    ~gzip_source() override;
+
+    /// The size of the content.
+    [[nodiscard]] std::uint64_t size() const override;
+    void read(std::uint64_t offset, std::span<std::byte> destination) const override;
+    /// True.
+    [[nodiscard]] bool supports_concurrent_reads() const override;
+    /// The description of the compressed source, followed by ", inflated".
+    [[nodiscard]] std::string description() const override;
+    /// The content when it lies in memory; empty when a temporary file holds it.
+    [[nodiscard]] std::span<const std::byte> bytes() const override;
+
+private:
+    struct state;
+    std::unique_ptr<const state> state_;
+};
+
+/// A sink that compresses what is written to it into one gzip member (RFC 1952), which it writes to another sink: a
+/// `.fits.gz` file, a convention outside the FITS standard, which every reader of FITS files that inflates gzip reads.
+/// The header of the member names no file and no time, and the bytes of the member depend on the level and on the
+/// version of zlib alone. It cannot rewrite, so that a writer sums the data of borrowed units for their checksums
+/// before it writes them, and refuses checksums over streamed data (write_options::checksums).
+class OPENFITS_API gzip_sink final : public output_sink
+{
+public:
+    /// A sink that compresses into target, which must outlive it, at level, from 1, the fastest, to 9, the smallest, 0
+    /// for no compression, or -1 for the default of zlib, 6.
+    /// @throws usage_error (errc::invalid_argument) for a level outside -1 to 9.
+    explicit gzip_sink(output_sink& target, int level = -1);
+    ~gzip_sink() override;
+
+    /// Compresses data, and writes to the target what the compression gives.
+    void write(std::span<const std::byte> data) override;
+    /// The bytes written to this sink, before their compression.
+    [[nodiscard]] std::uint64_t position() const override;
+    /// Ends the member, writes the rest of it to the target, and calls the finish() of the target.
+    void finish() override;
+
+private:
+    struct state;
+    std::unique_ptr<state> state_;
 };
 
 #if defined(_MSC_VER)

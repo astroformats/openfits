@@ -124,6 +124,13 @@ enum class errc
                              ///< malformed, ends early, or holds more (standard §10.4).
     tile_too_large,          ///< A tile larger than limits::max_tile_bytes once decompressed.
     too_many_tiles,          ///< A compressed image or table of more tiles than limits::max_tiles.
+
+    inflated_too_large, ///< A gzip-compressed file whose content is larger than limits::max_inflated_bytes once
+                        ///< inflated into memory, with no temporary directory for it (inflate_options).
+    data_fill,          ///< The fill of the last block of a data unit holds other bytes than zeros, or than spaces in
+                        ///< an ASCII table (standard §3.3.2, §7.2.3, §7.3.3).
+    repeated_hdu_name,  ///< Units of the same type with the same EXTNAME and EXTVER, which standard §4.4.2.6 recommends
+                        ///< against.
 };
 
 /// Where in a file a problem was found. Empty or absent members are unknown or do not apply.
@@ -275,11 +282,14 @@ enum class severity
     error,   ///< Part of the file is unavailable. Strict reading turns this into a failure.
 };
 
-/// A problem found while reading a file that did not stop the reading.
+/// A problem found while reading or verifying a file that did not stop the reading.
 struct diagnostic
 {
     openfits::severity severity = openfits::severity::info;
     errc code = errc::invalid_argument;
+    /// The section of the standard that the file departs from, as the standard numbers it, such as `4.4.2.7`, or an
+    /// appendix, such as `Appendix K`; empty for a limit of the library or a convention outside the standard.
+    std::string section{};
     std::string message{};
     error_context context{};
 

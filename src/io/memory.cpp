@@ -45,6 +45,16 @@ void memory_sink::write(std::span<const std::byte> data)
     data_.insert(data_.end(), data.begin(), data.end());
 }
 
+void memory_sink::write_zeros(std::uint64_t count)
+{
+    if (count > data_.max_size() - data_.size()) {
+        throw limit_error(errc::allocation_too_large,
+                          "a memory sink cannot hold " + std::to_string(count) + " more bytes in memory");
+    }
+    const std::size_t more = count;
+    data_.resize(data_.size() + more);
+}
+
 std::uint64_t memory_sink::position() const
 {
     return data_.size();

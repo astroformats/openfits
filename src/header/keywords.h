@@ -43,4 +43,9 @@ enum class value_class : std::uint8_t
 /// compression included.
 [[nodiscard]] std::optional<value_class> reserved_value_class(std::string_view name);
 
+/// The section of the standard that defines a reserved keyword of which reserved_value_class() gives the type: §4.4.2
+/// and its subsections, §6.1.2, §7.3.2, Appendix K and §10.3.3, and §8.2, whose Table 22 lists the keywords of world
+/// coordinates and of time, for every other one.
+[[nodiscard]] std::string_view reserved_section(std::string_view name);
+
 } // namespace openfits::detail

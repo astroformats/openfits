@@ -429,7 +429,8 @@ TEST(table_write, refuses_values_that_do_not_fit_the_model)
     EXPECT_TRUE(throws<usage_error>(errc::invalid_argument, [&] {
         (void)output.add_table(table_info{.kind = hdu_kind::image}, std::vector<column_values>{});
     }));
-    EXPECT_EQ(output.hdu_count(), 1U);
+    // A table refused adds nothing, not even the primary HDU that it would come after.
+    EXPECT_EQ(output.hdu_count(), 0U);
 }
 
 TEST(table_write, the_header_of_a_table_holds_no_keyword_of_its_columns)

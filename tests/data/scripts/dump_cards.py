@@ -20,6 +20,12 @@ import numpy as np
 from astropy.io import fits
 
 
+def dump_path(path: Path, suffix: str) -> Path:
+    """The dump of a sample, whose name ends in .fits or .fit, maybe followed by .fz or .gz: b15-mef.fits.fz has
+    b15-mef.cards, as the tests of the samples find it."""
+    return path.with_name(path.name[:path.name.rfind('.fit')] + suffix)
+
+
 def text(value: str) -> str:
     result = ''
     for c in value:
@@ -56,7 +62,7 @@ def dump(path: Path):
                 for card in unit.header.cards:
                     kind, value = value_of(card)
                     lines.append('\t'.join([str(index), text(card.keyword), kind, text(value), text(card.comment)]))
-    path.with_suffix('.cards').write_bytes(('\n'.join(lines) + '\n').encode('ascii'))
+    dump_path(path, '.cards').write_bytes(('\n'.join(lines) + '\n').encode('ascii'))
 
 
 def main():

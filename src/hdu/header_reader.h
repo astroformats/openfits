@@ -52,9 +52,16 @@ struct unit_header
 /// of many small units is read in a few large reads, and one of large data units in a read of four blocks for each
 /// header, which a header longer than them completes after them. The bound keeps the bytes of a reader in memory that
 /// the heap reuses, where the larger blocks that it maps afresh for each reader cost their pages again at each open.
+/// The bytes of the first read of a header: four blocks, which hold most headers.
+inline constexpr std::uint64_t first_header_read = 4 * block_size;
+
 class read_window
 {
 public:
+    /// Takes bytes, read from a source at offset by its caller, as the bytes of its last read, so that the reads of a
+    /// header among them read nothing more.
+    void prime(std::uint64_t offset, std::span<const std::byte> bytes);
+
     /// The size bytes of source from offset, which the source holds: from the bytes kept when they hold them, and read
     /// otherwise.
     /// @throws the exceptions of the source.

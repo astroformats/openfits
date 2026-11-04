@@ -49,6 +49,7 @@ set(internal_sources
     data/image_read.cpp
     data/image_write.cpp
     data/random_groups.cpp
+    hdu/copy.cpp
     hdu/header_reader.cpp
     hdu/section.cpp
     hdu/structure.cpp
@@ -85,10 +86,12 @@ set(public_sources
     table.cpp
     tile_cache.cpp
     types.cpp
+    verify.cpp
     version.cpp
     writer.cpp
     io/callback.cpp
     io/file.cpp
+    io/gzip.cpp
     io/interfaces.cpp
     io/memory.cpp)
 
@@ -115,7 +118,7 @@ set_target_properties(openfits PROPERTIES
     # The Debug library has a name of its own, so that Debug and Release builds install side by side in one prefix.
     DEBUG_POSTFIX d)
 
-# The Windows DLL is named after the minor version, as the soname is elsewhere (openfits-0.3.dll, libopenfits-0.3.dll
+# The Windows DLL is named after the minor version, as the soname is elsewhere (openfits-0.4.dll, libopenfits-0.4.dll
 # with MinGW), so that a program loads the DLL of the minor version that it was built against. The import library keeps
 # the name of the library, as libopenfits.so does, so that programs link with it as before. These are the names that
 # DLL_NAME_WITH_SOVERSION gives from CMake 3.27 on.

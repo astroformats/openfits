@@ -20,6 +20,9 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 // The walk of the header and data units of a file (standard §3), on demand.
@@ -44,11 +47,13 @@ struct hdu_access
 class unit_walk
 {
 public:
-    /// Walks the primary header of the source, and every unit in strict mode.
+    /// Walks the primary header of the source, and every unit in strict mode. start holds the first bytes of the
+    /// source when its caller read them, which the walk takes rather than read them again.
     /// @throws usage_error when source is null, invalid_data_error (errc::not_a_fits_file) when it does not start with
     ///         a primary header, limit_error when the primary header is beyond the limits, the first error of a strict
     ///         walk, and the exceptions of the source.
-    unit_walk(std::unique_ptr<input_source> source, const limits& limits, bool strict);
+    unit_walk(std::unique_ptr<input_source> source, const limits& limits, bool strict,
+              std::span<const std::byte> start = {});
 
     /// The unit at index, which walks the file as far as it; nullptr when the file has fewer units.
     /// @throws the error that stopped the walk before it, and the exceptions of the source.
@@ -76,7 +81,7 @@ private:
     // Walks one more unit, under the lock. False when there is none.
     bool walk_next();
     // Ends the walk with the error of a limit, which units after it throw.
-    void stop(errc code, const std::string& message, error_context context);
+    void stop(errc code, std::string_view section, const std::string& message, error_context context);
 
     thread_safe_source source_;
     limits limits_;

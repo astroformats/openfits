@@ -134,6 +134,26 @@ TEST(checksum, sums_of_pieces_continue_their_integers)
     }
 }
 
+// Zeros added without their bytes, as a reserved unit or a file made longer writes them, take their places among the
+// integers of the sum, and add nothing to it.
+TEST(checksum, zeros_take_their_places_without_their_bytes)
+{
+    const std::vector<std::byte> head = random_bytes(11, 5);
+    const std::vector<std::byte> tail = random_bytes(13, 6);
+    for (std::size_t lead = 0; lead <= head.size(); ++lead) {
+        for (const std::uint64_t zeros : {0U, 1U, 2U, 3U, 4U, 5U, 7U, 4096U, 4097U}) {
+            std::vector<std::byte> bytes(head.begin(), head.begin() + static_cast<std::ptrdiff_t>(lead));
+            bytes.resize(lead + zeros);
+            bytes.insert(bytes.end(), tail.begin(), tail.end());
+            checksum_accumulator sum;
+            sum.add(std::span(head).first(lead));
+            sum.add_zeros(zeros);
+            sum.add(tail);
+            ASSERT_EQ(sum.sum(), reference_sum(bytes)) << lead << ' ' << zeros;
+        }
+    }
+}
+
 TEST(checksum, sums_are_unchanged_by_trailing_zeros)
 {
     std::vector<std::byte> bytes = random_bytes(37, 4);
