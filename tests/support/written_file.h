@@ -26,7 +26,8 @@ enum class sink_kind
 /// suite.name.n.fits, the files of one test numbered in order.
 void record_file(std::span<const std::byte> file);
 
-/// The file that output writes with options into a sink of the given kind, recorded with record_file().
+/// The file that output writes with options into a sink of the given kind, recorded with record_file(), and verified:
+/// each finding of verify() of it is a failure of the test.
 [[nodiscard]] std::vector<std::byte> written(const writer& output, const write_options& options = {},
                                              sink_kind kind = sink_kind::rewritable);
 

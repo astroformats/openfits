@@ -4,6 +4,12 @@
 #include <openfits/error.h>
 #include <openfits/io.h>
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <vector>
+
 namespace openfits {
 
 // The destructors are the key functions: defining them here emits the type information once, in the library, so that
@@ -27,6 +33,16 @@ std::span<const std::byte> input_source::bytes() const
 }
 
 output_sink::~output_sink() = default;
+
+void output_sink::write_zeros(std::uint64_t count)
+{
+    const std::vector<std::byte> zeros(std::min<std::uint64_t>(count, std::uint64_t{1} << 20));
+    while (count > 0) {
+        const std::size_t piece = std::min<std::uint64_t>(count, zeros.size());
+        write(std::span(zeros).first(piece));
+        count -= piece;
+    }
+}
 
 bool output_sink::can_rewrite() const
 {

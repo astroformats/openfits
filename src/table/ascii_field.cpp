@@ -271,4 +271,36 @@ std::optional<double> read_plain_real_field(std::string_view field, std::uint32_
     return plain_real_value(std::span<const char>(number.data(), size));
 }
 
+bool is_null_field(std::string_view field, const std::optional<std::string>& null)
+{
+    if (!null) {
+        return false;
+    }
+    const std::string_view text = trim_trailing_spaces(*null);
+    return text.size() <= field.size() && trim_trailing_spaces(field) == text;
+}
+
+field_departure integer_field_departure(std::string_view field) noexcept
+{
+    const std::string_view number = trim_spaces(field);
+    return number.find(' ') == std::string_view::npos ? field_departure::none : field_departure::embedded_spaces;
+}
+
+field_departure real_field_departure(std::string_view field, std::uint32_t decimals) noexcept
+{
+    const std::string_view number = trim_spaces(field);
+    if (number.find(' ') != std::string_view::npos) {
+        return field_departure::embedded_spaces;
+    }
+    if (number.find_first_of("ed") != std::string_view::npos) {
+        return field_departure::lowercase_exponent;
+    }
+    // The digits before an exponent make the number: a blank field has none, and holds 0.
+    const std::string_view mantissa = number.substr(0, number.find_first_of("EDed+-", 1));
+    if (decimals > 0 && !mantissa.empty() && mantissa.find('.') == std::string_view::npos) {
+        return field_departure::implied_decimal_point;
+    }
+    return field_departure::none;
+}
+
 } // namespace openfits::detail

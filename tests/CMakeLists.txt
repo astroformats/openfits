@@ -34,6 +34,7 @@ endfunction()
 
 openfits_add_test_executable(openfits_tests
     concurrency/columns.cpp
+    concurrency/gzip.cpp
     concurrency/io.cpp
     concurrency/pixels.cpp
     concurrency/tiles.cpp
@@ -51,10 +52,12 @@ openfits_add_test_executable(openfits_tests
     conformance/units.cpp
     conformance/value.cpp
     samples/checksums.cpp
+    samples/gzip.cpp
     samples/headers.cpp
     samples/images.cpp
     samples/sample_catalog.cpp
     samples/tables.cpp
+    samples/verify.cpp
     support/links.cpp
     support/sparse_file.cpp
     support/temp_directory.cpp
@@ -77,8 +80,10 @@ openfits_add_test_executable(openfits_tests
     unit/error.cpp
     unit/file_io.cpp
     unit/file_specification.cpp
+    unit/gzip_file.cpp
     unit/gzip_tiles.cpp
     unit/hcompress.cpp
+    unit/hdu_copy.cpp
     unit/header.cpp
     unit/header_emission.cpp
     unit/image_info.cpp
@@ -106,7 +111,11 @@ openfits_add_test_executable(openfits_tests
     unit/tile_grid.cpp
     unit/utf16.cpp
     unit/utf8.cpp
+    unit/verify.cpp
     unit/version.cpp
+    unit/write_matrix.cpp
+    unit/write_stream.cpp
+    unit/write_validation.cpp
     unit/writer.cpp)
 
 # The suites of concurrency/, conformance/ and samples/ are named after their directory, which gives them their label.

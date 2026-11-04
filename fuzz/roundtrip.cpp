@@ -4,9 +4,10 @@
 // A model of a file made from untrusted bytes, written, and read back (standard §3.3.2, §4, §5): the input gives the
 // type of the values, the axes, cards of the header, reserved cards and the values themselves. Written in their own
 // type, the values read back bit for bit, with the cards in their order, and the same model writes the same bytes into
-// any sink. Written into integer data of a BITPIX and a scaling that the input gives, each stored value is the value
-// less BZERO over BSCALE, rounded half away from zero and clamped, and BLANK for NaN. A model that the writer refuses
-// must be refused with an error of the library's kinds.
+// any sink, its values in memory or streamed, and a copy of the unit read writes it again. Written into integer data of
+// a BITPIX and a scaling that the input gives, each stored value is the value less BZERO over BSCALE, rounded half away
+// from zero and clamped, and BLANK for NaN. A model that the writer refuses must be refused with an error of the
+// library's kinds.
 
 #include <openfits/error.h>
 #include <openfits/header.h>
@@ -96,7 +97,7 @@ openfits::header cards_of(input_bytes& in)
         for (std::size_t c = 0; c < length; ++c) {
             name += letters[in.next() % letters.size()];
         }
-        const std::uint8_t kind = in.next() % 4;
+        const std::uint8_t kind = in.next() % 5;
         const auto number = static_cast<std::int64_t>(static_cast<std::int8_t>(in.next())) * 1000;
         switch (kind) {
         case 0:
@@ -107,6 +108,10 @@ openfits::header cards_of(input_bytes& in)
             break;
         case 2:
             cards.append(openfits::card(name, static_cast<double>(number) / 7.0));
+            break;
+        case 3:
+            // The text of the value, which the record holds as it is.
+            cards.append(openfits::card::with_value_text(name, std::to_string(number), "a value text"));
             break;
         default:
             cards.append(openfits::card(name, std::string(length, 'x'), "a string"));
@@ -154,6 +159,14 @@ void round_trip(input_bytes& in, const std::vector<std::uint64_t>& axes, const o
     }
     require(file.size() % 2880 == 0);
     require(write(output, true) == file);
+    // The values given chunk after chunk write the same file.
+    writer streamed;
+    (void)streamed.add_image(info, openfits::numeric_type_of<T>(),
+                             [&values](std::uint64_t first, std::span<std::byte> chunk) {
+                                 std::memcpy(chunk.data(), values.data() + first, chunk.size());
+                             },
+                             {.reserved_cards = reserved});
+    require(write(streamed, false) == file);
 
     const reader input(std::make_unique<openfits::memory_source>(file));
     require(input.hdu_count() == 1);
@@ -173,6 +186,10 @@ void round_trip(input_bytes& in, const std::vector<std::uint64_t>& axes, const o
     const std::vector<T> back = input.read_pixels<T>(0);
     require(back.size() == values.size());
     require(values.empty() || std::memcmp(back.data(), values.data(), values.size() * sizeof(T)) == 0);
+    // The unit copied as it is.
+    writer copier;
+    (void)copier.add_hdu(input, 0);
+    require(write(copier, true) == file);
 }
 
 // value rounded half away from zero, from its truncation and the fraction, which the subtraction gives exactly: the

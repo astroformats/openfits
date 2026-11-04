@@ -172,7 +172,8 @@ struct card_access;
 /// keyword.
 ///
 /// A card read from a file keeps the record it was read from, which text() gives, so that a header is written back
-/// unchanged; a card built by the application has none, and the writer formats it. Values and copies own their data.
+/// unchanged; a card built by the application has none, and the writer formats it under the options of the save, a card
+/// of with_value_text() with its value written as the text it was given. Values and copies own their data.
 class OPENFITS_API card
 {
 public:
@@ -194,13 +195,17 @@ public:
     /// @throws usage_error when record is longer than 80 bytes.
     [[nodiscard]] static card parse(std::string_view record);
 
-    /// A keyword with its value given as the text of a value field, which a record writes as it is ("1.50E+03", a
-    /// string with its quotes), and a comment: the card that parse() reads from the record the writer would make of
-    /// them, the text right-justified in bytes 11 to 30 when it is not a string and fits there.
-    /// @throws usage_error (errc::invalid_keyword) for a name that is not of standard §4.1.2.1, or that has no value:
-    ///         COMMENT, HISTORY, the blank keyword, CONTINUE and END.
-    /// @throws validation_error (errc::invalid_character) for a text or a comment outside printable ASCII, and
-    ///         (errc::value_too_long) when the record does not hold them.
+    /// A keyword with its value given as the text of a value field, which its record holds as it is ("1.50E+03", a
+    /// string with its quotes), and a comment. The card has no record: the writer makes one under the options of the
+    /// save, as for any card that the application builds, with the text from byte 11, right-justified to byte 30 when
+    /// it is not a string and fits there; a name that is not of standard §4.1.2.1 written with the HIERARCH convention
+    /// and a comment that does not fit cut, when the options allow it, and a string that does not fit continued over
+    /// CONTINUE records, as the string that value() holds. value() is the value that the text gives, as a reader reads
+    /// it, and none for a text of none of the forms of standard §4.2; the writer refuses such a text, and one with a
+    /// departure that a reader tolerates, such as a lowercase exponent letter. value_text() is the text without its
+    /// leading and trailing spaces.
+    /// @throws usage_error (errc::invalid_keyword) for a name that has no value: COMMENT, HISTORY, the blank keyword,
+    ///         CONTINUE and END.
     [[nodiscard]] static card with_value_text(std::string_view keyword, std::string_view value_text,
                                               std::string_view comment = {});
 
@@ -224,9 +229,13 @@ public:
         return value_;
     }
 
-    /// The value as the record writes it, a string with its quotes; empty for a card built by the application.
+    /// The value as the record writes it, a string with its quotes, or as with_value_text() was given it; empty for
+    /// another card built by the application.
     [[nodiscard]] std::string_view value_text() const noexcept
     {
+        if (!record_) {
+            return text_;
+        }
         return {text_.data() + value_begin_, static_cast<std::size_t>(value_end_ - value_begin_)};
     }
 
@@ -241,10 +250,11 @@ public:
     /// "/ [s] exposure time", without the brackets; nothing when it does not start with them.
     [[nodiscard]] std::optional<std::string_view> unit() const noexcept;
 
-    /// The record that the card was read from, 80 characters; empty for a card built by the application.
+    /// The record that the card was read from, 80 characters; empty for a card built by the application,
+    /// with_value_text() included.
     [[nodiscard]] std::string_view text() const noexcept
     {
-        return text_;
+        return record_ ? std::string_view(text_) : std::string_view();
     }
 
     friend bool operator==(const card&, const card&) = default;
@@ -255,11 +265,14 @@ private:
     std::string keyword_{};
     card_value value_{};
     std::string comment_{};
+    // The record that the card was read from, or the value text of a card of with_value_text(), which record_ tells
+    // apart.
     std::string text_{};
     std::uint8_t value_begin_ = 0;
     std::uint8_t value_end_ = 0;
     bool value_indicator_ = false;
     bool fixed_format_ = false;
+    bool record_ = false;
 };
 
 #if defined(_MSC_VER)

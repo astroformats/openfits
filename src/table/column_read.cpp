@@ -605,17 +605,6 @@ template <typename T> void store_undefined(column_job& job, std::uint64_t destin
     std::memcpy(out, &value, sizeof(T));
 }
 
-// True when a field of an ASCII table is the TNULLn of its column, which is filled with spaces to the width of the
-// field (standard §7.2.2).
-bool is_null_field(std::string_view field, const std::optional<std::string>& null)
-{
-    if (!null) {
-        return false;
-    }
-    const std::string_view text = trim_trailing_spaces(*null);
-    return text.size() <= field.size() && trim_trailing_spaces(field) == text;
-}
-
 // A field of an ASCII table into the destination as T: the forms that most fields take without allocating, the others
 // as Fortran reads them.
 template <typename T> void convert_ascii(column_job& job, std::string_view field, std::uint64_t destination)

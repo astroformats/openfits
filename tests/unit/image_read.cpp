@@ -71,7 +71,7 @@ void PrintTo(source_kind kind, std::ostream* output)
 }
 
 // The source owns a copy of the bytes, so that a temporary fixture can be opened.
-reader open(const fixture& file, source_kind kind = source_kind::memory, openfits::read_options options = {})
+reader open(const fixture& file, source_kind kind = source_kind::memory, const openfits::read_options& options = {})
 {
     if (kind == source_kind::memory) {
         return reader(std::make_unique<openfits::memory_source>(std::vector<std::byte>(file.bytes())), options);

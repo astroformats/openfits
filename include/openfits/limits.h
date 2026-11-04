@@ -43,7 +43,8 @@ struct limits
     /// Number of elements of one variable-length array (standard §7.3.5): every count of a P descriptor, and the
     /// compressed bytes of a tile of max_tile_bytes.
     std::uint64_t max_vla_elements = std::uint64_t{1} << 32;
-    /// Size of a gzip-compressed file once inflated into memory, in bytes.
+    /// Size of the content of a gzip-compressed file once inflated into memory, in bytes: a larger one is refused,
+    /// unless a temporary directory takes it (inflate_options).
     std::uint64_t max_inflated_bytes = std::uint64_t{16} << 30;
     /// Number of diagnostics that a reader lists. When a file has more, the last one listed stands for itself and those
     /// after it: it says how many they are, and has the severity of the most serious of them, with the code of the

@@ -10,7 +10,11 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <exception>
+#include <new>
+#include <random>
 #include <string>
+#include <system_error>
 
 namespace openfits::detail {
 
@@ -22,6 +26,53 @@ void check_path_argument(std::string_view path, std::string_view what)
     if (!is_valid_utf8(path)) {
         throw usage_error(errc::invalid_utf8, std::string(what) + ", " + quote(path) + ", is not valid UTF-8");
     }
+}
+
+std::uint64_t random_seed()
+{
+    // std::random_device reports a failure with an exception type of its own choice, which depends on the standard
+    // library. Every one of them becomes an io_error, except std::bad_alloc.
+    try {
+        std::random_device device;
+        // Each call produces 32 bits.
+        const std::uint64_t high = device();
+        return (high << 32U) | std::uint64_t{device()};
+    } catch (const std::system_error& failure) {
+        throw io_error(errc::entropy_unavailable, "no random data for a temporary name: " + std::string(failure.what()),
+                       failure.code());
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception& failure) {
+        throw io_error(errc::entropy_unavailable,
+                       "no random data for a temporary name: " + std::string(failure.what()));
+    }
+}
+
+std::uint64_t next_random(std::uint64_t& state) noexcept
+{
+    state += 0x9E37'79B9'7F4A'7C15U;
+    std::uint64_t value = state;
+    value = (value ^ (value >> 30U)) * 0xBF58'476D'1CE4'E5B9U;
+    value = (value ^ (value >> 27U)) * 0x94D0'49BB'1331'11EBU;
+    return value ^ (value >> 31U);
+}
+
+// A fixed length keeps the name within the limits of the file system whatever the name of the target.
+std::string temporary_path(std::string_view target, std::uint64_t random)
+{
+#if defined(_WIN32)
+    const std::size_t separator = target.find_last_of("/\\");
+#else
+    const std::size_t separator = target.find_last_of('/');
+#endif
+    std::string path(target.substr(0, separator + 1));
+    path += ".openfits-";
+    constexpr std::string_view digits = "0123456789abcdef";
+    for (int shift = 60; shift >= 0; shift -= 4) {
+        path += digits[(random >> static_cast<unsigned>(shift)) & 0xFU];
+    }
+    path += ".tmp";
+    return path;
 }
 
 #if defined(_WIN32)

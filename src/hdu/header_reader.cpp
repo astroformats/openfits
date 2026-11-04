@@ -18,7 +18,6 @@ namespace openfits::detail {
 
 namespace {
 
-constexpr std::uint64_t first_read = 4 * block_size;
 constexpr std::uint64_t most_ahead = std::uint64_t{1} << 18;
 constexpr std::string_view end_keyword = "END     ";
 
@@ -104,14 +103,15 @@ void check_continuations(std::vector<card>& cards, std::uint64_t offset, std::ui
         if (current.has_value_indicator() && current.value().kind() == value_kind::string) {
             const std::size_t length = continuation_length(cards, i);
             if (length > 0 && is_reserved_keyword(current.keyword())) {
-                log.warning(errc::continued_reserved_keyword,
+                log.warning(errc::continued_reserved_keyword, "4.2.1.2",
                             "CONTINUE records continue the string of the reserved keyword " + quote(current.keyword()) +
                                 ", which the standard does not allow; the string is joined",
                             {.hdu = hdu, .keyword = std::string(current.keyword()), .offset = position});
             }
             i += length;
         } else if (is_continuation(current)) {
-            log.info(errc::orphaned_continue, "a CONTINUE record continues no string, and is read as commentary",
+            log.info(errc::orphaned_continue, "4.2.1.2",
+                     "a CONTINUE record continues no string, and is read as commentary",
                      {.hdu = hdu, .keyword = "CONTINUE", .offset = position});
             cards[i] = commentary_of(current);
         }
@@ -143,7 +143,7 @@ void check_repeated(const std::vector<card>& cards, std::uint64_t offset, std::u
     std::ranges::sort(repeated);
     for (const std::size_t i : repeated) {
         const card& current = cards[i];
-        log.warning(errc::repeated_keyword,
+        log.warning(errc::repeated_keyword, "4.1.2.3",
                     "the keyword " + quote(current.keyword()) +
                         " has a value in an earlier record too, which lookups find",
                     {.hdu = hdu, .keyword = std::string(current.keyword()), .offset = offset + (i * record_length)});
@@ -171,8 +171,8 @@ std::span<const std::byte> read_window::bytes(const thread_safe_source& source, 
         return buffer_.bytes().first(size_);
     }
     // A header within the bytes read or close after them: the units are small, and the reads grow.
-    const bool close = after && offset - offset_ < 2 * std::max<std::uint64_t>(size_, first_read);
-    ahead_ = close ? std::min(std::max(ahead_ * 2, first_read), most_ahead) : 0;
+    const bool close = after && offset - offset_ < 2 * std::max<std::uint64_t>(size_, first_header_read);
+    ahead_ = close ? std::min(std::max(ahead_ * 2, first_header_read), most_ahead) : 0;
     const std::size_t wanted = std::min(std::max(size, ahead_), source.size() - offset);
     size_ = 0;
     grow(wanted, 0);
@@ -180,6 +180,16 @@ std::span<const std::byte> read_window::bytes(const thread_safe_source& source, 
     source.read(offset, buffer_.bytes().first(wanted));
     size_ = wanted;
     return buffer_.bytes().first(size);
+}
+
+void read_window::prime(std::uint64_t offset, std::span<const std::byte> bytes)
+{
+    size_ = 0;
+    grow(bytes.size(), 0);
+    std::ranges::copy(bytes, buffer_.bytes().begin());
+    offset_ = offset;
+    size_ = bytes.size();
+    ahead_ = bytes.size();
 }
 
 void read_window::grow(std::size_t size, std::size_t kept)
@@ -198,7 +208,8 @@ unit_header read_header(const thread_safe_source& source, std::uint64_t offset, 
     const std::uint64_t available = source.size() - offset;
     const std::uint64_t cap = limits.max_header_bytes == 0 ? available : std::min(available, limits.max_header_bytes);
     header_bytes bytes(source, offset, window);
-    std::span<const std::byte> data = bytes.fetch(std::min(std::max<std::uint64_t>(cap, record_length), first_read));
+    std::span<const std::byte> data =
+        bytes.fetch(std::min(std::max<std::uint64_t>(cap, record_length), first_header_read));
 
     if (!starts_with_keyword(data, first_keyword)) {
         return {.outcome = header_outcome::not_a_header};
@@ -224,7 +235,7 @@ unit_header read_header(const thread_safe_source& source, std::uint64_t offset, 
             break;
         }
         if (data.size() >= cap) {
-            log.error(errc::header_too_large,
+            log.error(errc::header_too_large, "",
                       "the header is longer than the limit of " + std::to_string(limits.max_header_bytes) + " bytes",
                       {.hdu = hdu, .offset = offset});
             return {.outcome = header_outcome::too_large};
@@ -241,31 +252,32 @@ unit_header read_header(const thread_safe_source& source, std::uint64_t offset, 
         const std::uint64_t block_end = (header_end + block_size - 1) / block_size * block_size;
         result.size = std::min(block_end, available);
         if (limits.max_header_bytes != 0 && result.size > limits.max_header_bytes) {
-            log.error(errc::header_too_large,
+            log.error(errc::header_too_large, "",
                       "the header is longer than the limit of " + std::to_string(limits.max_header_bytes) + " bytes",
                       where);
             return {.outcome = header_outcome::too_large};
         }
         data = bytes.fetch(result.size);
         if (!all_spaces(record_at(data, scanned).substr(8))) {
-            log.warning(errc::header_fill, "the END record holds other bytes than spaces after END, which are ignored",
+            log.warning(errc::header_fill, "4.4.1.1",
+                        "the END record holds other bytes than spaces after END, which are ignored",
                         {.hdu = hdu, .keyword = "END", .offset = offset + scanned});
         }
         if (header_end < data.size() && !all_spaces(text_of(data.subspan(header_end)))) {
-            log.warning(errc::header_fill,
+            log.warning(errc::header_fill, "3.3.1",
                         "the last block of the header holds other bytes than spaces after END, which are ignored",
                         {.hdu = hdu, .offset = offset + header_end});
         }
         if (result.size < block_end) {
-            log.warning(errc::truncated_file,
+            log.warning(errc::truncated_file, "3.1",
                         "the file ends within the last block of the header, which is read as if it were complete",
                         where);
         }
     } else {
         result.size = available;
-        log.warning(errc::missing_end, "the header has no END record before the end of the file", where);
+        log.warning(errc::missing_end, "3.3.1", "the header has no END record before the end of the file", where);
         if (available % record_length != 0) {
-            log.warning(errc::truncated_file,
+            log.warning(errc::truncated_file, "3.1",
                         "the file ends within a record of the header, which is read as if padded with spaces", where);
         }
     }
@@ -280,7 +292,7 @@ unit_header read_header(const thread_safe_source& source, std::uint64_t offset, 
         for (diagnostic& departure : departures) {
             departure.context.hdu = hdu;
             departure.context.offset = offset + position;
-            log.add(departure.severity, departure.code, std::move(departure.message), std::move(departure.context));
+            log.add(std::move(departure));
         }
         result.cards.push_back(std::move(value));
     }

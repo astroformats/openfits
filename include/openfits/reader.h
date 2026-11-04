@@ -46,10 +46,14 @@ struct read_options
     /// unit that has them, as reader::verify() does, reading the whole unit, and fail with integrity_error
     /// (errc::checksum_mismatch) at the first that does not match its unit.
     bool strict = false;
+    /// Where the content of a gzip-compressed file goes once inflated: into memory within limits::max_inflated_bytes,
+    /// or into a temporary file in the directory that it gives.
+    inflate_options inflate{};
 };
 
 namespace detail {
 struct tile_cache_access;
+struct reader_access;
 } // namespace detail
 
 /// Decoded tiles of compressed images (standard §10.1), kept for the reads that are given the cache, so that an image
@@ -228,11 +232,11 @@ struct parameter_read_options
     openfits::rounding rounding = openfits::rounding::truncate;
 };
 
-/// Options of reader::verify().
+/// Options of reader::verify(), and of verify() of a whole file (verify.h).
 struct verify_options
 {
     /// Called as the unit is read, and able to cancel the verification. Its units of work are the bytes of the unit
-    /// that the file holds, its header and its data records.
+    /// that the file holds, its header and its data records; for verify() of a file, the bytes of the file.
     progress_function progress{};
 };
 
@@ -252,24 +256,27 @@ struct verify_options
 class OPENFITS_API reader
 {
 public:
-    /// Opens the file at path, which is UTF-8 on every platform and always the name of a file, brackets included.
+    /// Opens the file at path, which is UTF-8 on every platform and always the name of a file, brackets included. A
+    /// file compressed whole with gzip, whatever its name, is inflated first, as gzip_source inflates it.
     /// @throws usage_error when path is empty or not valid UTF-8, and the exceptions of file_source.
     /// @throws invalid_data_error (errc::not_a_fits_file) when the file does not start with the SIMPLE keyword of a
     ///         primary header (standard §4.4.1.1), and the exceptions of a strict open.
-    /// @throws limit_error when the primary header is beyond the limits.
-    explicit reader(std::string_view path, read_options options = {});
+    /// @throws limit_error when the primary header is beyond the limits; and the exceptions of gzip_source for a
+    ///         gzip-compressed file.
+    explicit reader(std::string_view path, const read_options& options = {});
 
-    /// Opens the file that source holds, which the reader then owns.
+    /// Opens the file that source holds, which the reader then owns. A source that starts with the bytes 1f 8b of a
+    /// gzip member is inflated first, as gzip_source inflates it, and the reader reads the content.
     /// @throws usage_error when source is null, or gives bytes in memory of another size than its own.
     /// @throws invalid_data_error and limit_error as the open of a path, and the exceptions of the source.
-    explicit reader(std::unique_ptr<input_source> source, read_options options = {});
+    explicit reader(std::unique_ptr<input_source> source, const read_options& options = {});
 
     /// Opens the file of a file specification, and selects its unit and its image section, which selected_hdu() and
     /// section() give: a section without a unit selector applies to the first unit that holds an image.
     /// @throws usage_error (errc::hdu_not_found) when the file has no such unit, and (errc::invalid_file_specification)
     ///         when the section does not fit the axes of its image or the unit holds none.
     /// @throws the exceptions of the open of a path.
-    explicit reader(const file_specification& specification, read_options options = {});
+    explicit reader(const file_specification& specification, const read_options& options = {});
 
     reader(reader&& other) noexcept;
     reader& operator=(reader&& other) noexcept;
@@ -635,6 +642,8 @@ private:
 
     pixel_read_result read_group_values(std::size_t hdu, std::uint64_t group, numeric_type type,
                                         std::span<std::byte> destination, const pixel_read_options& options) const;
+
+    friend struct detail::reader_access;
 
     struct state;
     std::unique_ptr<state> state_;

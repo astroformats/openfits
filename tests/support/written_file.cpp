@@ -4,6 +4,8 @@
 #include "support/written_file.h"
 
 #include <openfits/io.h>
+#include <openfits/reader.h>
+#include <openfits/verify.h>
 
 #include "support/environment.h"
 #include "support/files.h"
@@ -11,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -53,6 +56,11 @@ std::vector<std::byte> written(const writer& output, const write_options& option
         output.save(sink, options);
     }
     record_file(file);
+    // Every file that the writer writes conforms to the standard: its report holds no finding.
+    const reader written_file(std::make_unique<memory_source>(std::vector<std::byte>(file.begin(), file.end())));
+    for (const diagnostic& finding : verify(written_file)) {
+        ADD_FAILURE() << "the written file departs from standard " << finding.section << ": " << finding.message;
+    }
     return file;
 }
 

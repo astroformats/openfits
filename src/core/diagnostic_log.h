@@ -16,11 +16,13 @@ namespace openfits::detail {
 /// limit of the walk (errc::too_many_hdus, errc::header_too_large), and invalid_data_error for every other code.
 [[noreturn]] void throw_file_error(errc code, std::string_view message, error_context context);
 
-/// The diagnostics recorded while a file is read. In strict mode, an error fails the read instead.
+/// The diagnostics recorded while a file is read. In strict mode, an error fails the read instead. Each takes the
+/// section of the standard that the file departs from, as diagnostic::section gives it.
 ///
 /// The log lists at most max_diagnostics of them (limits::max_diagnostics, zero for no limit), since a file can hold a
 /// million problems. When there are more, the last one stands for itself and all those after it: it says how many
-/// they are, and has the severity of the most serious of them and the code of the first of those, without a context.
+/// they are, and has the severity of the most serious of them and the code and the section of the first of those,
+/// without a context.
 class diagnostic_log
 {
 public:
@@ -29,16 +31,20 @@ public:
     {}
 
     /// Something the standard allows was noted.
-    void info(errc code, std::string message, error_context context = {});
+    void info(errc code, std::string_view section, std::string message, error_context context = {});
 
     /// A harmless departure from the standard was tolerated.
-    void warning(errc code, std::string message, error_context context = {});
+    void warning(errc code, std::string_view section, std::string message, error_context context = {});
 
     /// Part of the file is unavailable. Throws the exception of throw_file_error() instead in strict mode.
-    void error(errc code, std::string message, error_context context = {});
+    void error(errc code, std::string_view section, std::string message, error_context context = {});
 
     /// Records a diagnostic of any severity, as the function of that severity does.
-    void add(openfits::severity level, errc code, std::string message, error_context context = {});
+    void add(openfits::severity level, errc code, std::string_view section, std::string message,
+             error_context context = {});
+
+    /// Records a diagnostic as it is, as add() does.
+    void add(diagnostic entry);
 
     [[nodiscard]] const std::vector<diagnostic>& entries() const noexcept
     {
@@ -49,7 +55,8 @@ public:
     [[nodiscard]] std::vector<diagnostic> release() noexcept;
 
 private:
-    void record(openfits::severity level, errc code, std::string message, error_context context);
+    void record(openfits::severity level, errc code, std::string_view section, std::string message,
+                error_context context);
 
     bool strict_;
     std::uint64_t max_diagnostics_;

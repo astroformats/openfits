@@ -8,71 +8,14 @@
 #include "io/paths.h"
 #include "io/range_check.h"
 
-#include <exception>
+#include <limits>
 #include <memory>
-#include <new>
 #include <optional>
-#include <random>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 
 namespace openfits {
-
-namespace {
-
-// 64 bits of the random source of the system, from which the names of the temporary files of a sink follow.
-std::uint64_t random_seed()
-{
-    // std::random_device reports a failure with an exception type of its own choice, which depends on the standard
-    // library. Every one of them becomes an io_error, except std::bad_alloc.
-    try {
-        std::random_device device;
-        // Each call produces 32 bits.
-        const std::uint64_t high = device();
-        return (high << 32U) | std::uint64_t{device()};
-    } catch (const std::system_error& failure) {
-        throw io_error(errc::entropy_unavailable, "no random data for a temporary name: " + std::string(failure.what()),
-                       failure.code());
-    } catch (const std::bad_alloc&) {
-        throw;
-    } catch (const std::exception& failure) {
-        throw io_error(errc::entropy_unavailable,
-                       "no random data for a temporary name: " + std::string(failure.what()));
-    }
-}
-
-// The next value of the SplitMix64 sequence of state, which gives each attempt of a sink a name of its own.
-std::uint64_t next_random(std::uint64_t& state) noexcept
-{
-    state += 0x9E37'79B9'7F4A'7C15U;
-    std::uint64_t value = state;
-    value = (value ^ (value >> 30U)) * 0xBF58'476D'1CE4'E5B9U;
-    value = (value ^ (value >> 27U)) * 0x94D0'49BB'1331'11EBU;
-    return value ^ (value >> 31U);
-}
-
-// A name in the directory of target, which is absolute and so has a separator: .openfits-<16 hexadecimal digits>.tmp. A
-// fixed length keeps it within the limits of the file system whatever the name of the target.
-std::string temporary_path(std::string_view target, std::uint64_t random)
-{
-#if defined(_WIN32)
-    const std::size_t separator = target.find_last_of("/\\");
-#else
-    const std::size_t separator = target.find_last_of('/');
-#endif
-    std::string path(target.substr(0, separator + 1));
-    path += ".openfits-";
-    constexpr std::string_view digits = "0123456789abcdef";
-    for (int shift = 60; shift >= 0; shift -= 4) {
-        path += digits[(random >> static_cast<unsigned>(shift)) & 0xFU];
-    }
-    path += ".tmp";
-    return path;
-}
-
-} // namespace
 
 struct file_source::state
 {
@@ -227,9 +170,9 @@ file_sink::file_sink(std::string_view path, file_sink_options options)
         throw io_error(errc::file_exists, target + " exists, and the file sink may not replace it");
     }
     // A name taken by another file is tried again with another random number, which only a crowded directory needs.
-    std::uint64_t random = random_seed();
+    std::uint64_t random = detail::random_seed();
     for (int attempt = 0; attempt < 16; ++attempt) {
-        std::string temporary = temporary_path(target, next_random(random));
+        std::string temporary = detail::temporary_path(target, detail::next_random(random));
         std::optional<detail::native_file> file = detail::native_file::create_new(temporary, target);
         if (file) {
             // The file exists from here, and must not stay behind when the state cannot be allocated. Nothing is moved
@@ -253,6 +196,20 @@ void file_sink::write(std::span<const std::byte> data)
     state_->check_writable();
     state_->file.write_at(state_->position, data);
     state_->position += data.size();
+}
+
+void file_sink::write_zeros(std::uint64_t count)
+{
+    state_->check_writable();
+    if (count == 0) {
+        return;
+    }
+    if (count > std::numeric_limits<std::uint64_t>::max() - state_->position) {
+        throw io_error(errc::write_failed, "a file of more than 2^64 bytes cannot be written: " + state_->target);
+    }
+    // The file holds every byte written so far: making it longer appends zeros, which a write makes no shorter.
+    state_->file.resize(state_->position + count);
+    state_->position += count;
 }
 
 std::uint64_t file_sink::position() const

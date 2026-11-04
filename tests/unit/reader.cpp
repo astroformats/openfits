@@ -47,7 +47,7 @@ using openfits::test::throws;
 using openfits::test::with;
 
 // The source owns a copy of the bytes, so that a temporary fixture can be opened.
-reader open(const fixture& file, read_options options = {})
+reader open(const fixture& file, const read_options& options = {})
 {
     return reader(std::make_unique<openfits::memory_source>(std::vector<std::byte>(file.bytes())), options);
 }

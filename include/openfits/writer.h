@@ -12,24 +12,39 @@
 #include <openfits/table.h>
 #include <openfits/types.h>
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 /// @file
 /// Writing FITS files: headers, images and tables.
 
 namespace openfits {
 
+class reader;
+
 /// What a save to a path does when the file exists.
 enum class if_exists : std::uint8_t
 {
     replace, ///< Replaces it, once the new file is complete.
     fail,    ///< Fails with io_error (errc::file_exists), and leaves it as it is.
+};
+
+/// What a save does with the bytes outside printable ASCII, 0x20 to 0x7E, in the cards of a header: in strings,
+/// comments and the text of commentary cards, and anywhere in the records of cards read from a file. The standard
+/// allows none (standard §4.1.2.3), and a keyword name never takes them.
+enum class non_ascii : std::uint8_t
+{
+    refuse,  ///< Fails with validation_error (errc::invalid_character), before anything is written.
+    replace, ///< Writes a question mark in place of each such byte.
+    keep,    ///< Writes them as they are, which the standard forbids: to copy cards as they were read.
 };
 
 /// Options of a save. With the defaults, the file holds the structures of the standard alone, which every FITS reader
@@ -49,6 +64,8 @@ struct write_options
     /// refuse it: standard §4.2.1.2 forbids it, but CFITSIO writes such strings and readers join them, as the reader
     /// of this library does with a warning. The structural keywords are refused still.
     bool continue_reserved_keywords = false;
+    /// What the bytes outside printable ASCII of the cards of a header become.
+    openfits::non_ascii non_ascii = openfits::non_ascii::refuse;
     /// What a save to a path does when the file exists.
     openfits::if_exists if_exists = openfits::if_exists::replace;
     /// Flush the file to the storage device before it replaces the target, so that it survives a power failure.
@@ -57,7 +74,9 @@ struct write_options
     /// Write DATASUM and CHECKSUM in every unit, after the cards of its header (standard §4.4.2.7): the sum of its data
     /// records, and the string of standard Appendix J that makes the sum of the whole unit negative zero, which
     /// readers verify the unit against. The data are summed as they are written, and each header completed in place
-    /// once its data are written; a sink that cannot rewrite has them summed in a pass of their own first.
+    /// once its data are written; a sink that cannot rewrite has them summed in a pass of their own first, which the
+    /// values of a stream cannot take (writer::add_image() and writer::add_table() of a function): such a sink is
+    /// refused then. A unit copied as it is keeps its own (writer::add_hdu()).
     bool checksums = false;
     /// The time of the checksums, written as the comment of DATASUM and CHECKSUM in the form of format_date(), as
     /// standard §4.4.2.7 recommends; no comment without one, since the library reads no clock.
@@ -67,10 +86,58 @@ struct write_options
     /// which the standard requires, so that it and every unit after it lie one index further in the file than their
     /// writer gave them.
     std::optional<compression_options> compression{};
-    /// Called as the file is written, and able to cancel the save. Its units of work are the bytes of the file, and
-    /// with checksums over a sink that cannot rewrite, the bytes of the data once more, summed before the file is
-    /// written.
+    /// Compress the whole file with gzip (RFC 1952) at this level of zlib, from 1, the fastest, to 9, the smallest, 0
+    /// for none or -1 for its default, 6, as gzip_sink compresses it: a `.fits.gz` file, a convention outside the
+    /// standard, which readers that inflate gzip read. Not compressed when empty. A gzip sink cannot rewrite, so that
+    /// the checksums of streamed units, and a streamed table whose header is completed once its rows are written, are
+    /// refused, as over any sink that cannot rewrite.
+    std::optional<int> gzip_level{};
+    /// Called as the file is written, and able to cancel the save. Its units of work are the bytes of the file, before
+    /// a gzip compression, and with checksums over a sink that cannot rewrite, the bytes of the data once more, summed
+    /// before the file is written. With a table of streamed rows whose number is not given, the total grows as they
+    /// are written.
     progress_function progress{};
+};
+
+/// What the data of a reserved image hold until an editor fills them (writer::add_reserved_image()).
+enum class reserved_fill : std::uint8_t
+{
+    zeros,            ///< Stored values of 0, which a file holds without writing them where its sink allows it.
+    undefined_values, ///< BLANK in integer data, which the image must give, and NaN in floating-point data (standard
+                      ///< §4.4.2.5, §5.3).
+};
+
+/// Options of a reserved image of the writer.
+struct reserved_image_options
+{
+    /// Blank cards before END: room that later changes of the header take in place (standard §4.4.2.4).
+    std::size_t reserved_cards = 0;
+    /// What the data hold.
+    reserved_fill fill = reserved_fill::zeros;
+};
+
+/// Gives the values of an image that the writer streams (writer::add_image() of a function): fills values, which hold
+/// values of the type the image was added with, in the byte order of the host, with the elements of the image from the
+/// element at index first on, in the order of the data, the first axis varying fastest. A save calls it in order, for
+/// consecutive runs of elements from the first to the last: whole rows, the elements along the first axis, as many as
+/// fit in about 256 KiB of values, or part of a row when one row is larger; for a compressed image, the rows of as many
+/// whole bands of tiles as fit in 64 MiB of stored values, one band at least. Each save calls it again from the first
+/// element. Its exceptions pass through unchanged, and end the save.
+using image_fill = std::function<void(std::uint64_t first, std::span<std::byte> values)>;
+
+/// Gives the rows of a table that the writer streams (writer::add_table() of a function): the values of each column of
+/// the table for the rows from the row at index first on, as many rows as it chooses, in a column_values for each
+/// column as add_table() takes them; its values stay valid until it is called again or the save ends. No columns, or
+/// columns of no row, end the table. A save calls it in order, the first row after the rows it gave so far, and each
+/// save again from row 0. Its exceptions pass through unchanged, and end the save.
+using table_rows = std::function<std::vector<column_values>(std::uint64_t first)>;
+
+/// Options of a unit copied by the writer (writer::add_hdu()).
+struct hdu_copy_options
+{
+    /// The cards of the header of the copy but its structural ones, which the writer takes from the unit: a header such
+    /// as without_structural() of the unit's, edited. Empty to copy the cards of the unit as they are.
+    std::optional<openfits::header> header{};
 };
 
 /// Options of an image of the writer.
@@ -130,10 +197,17 @@ struct table_write_options
 /// zeros, or with spaces for an ASCII table (standard §3.3.2, §7.2.3).
 ///
 /// The values of an image or a table are borrowed: they must stay valid and unchanged until the last save(), which
-/// never modifies them. save() formats every header before it writes anything, and throws validation_error, naming the
-/// unit and the keyword, for a header that the standard forbids. A writer is thread-compatible, like a standard
-/// container: save() can run on several threads at once, and a change needs exclusive access. It can be moved, and a
-/// moved-from writer can only be destroyed or assigned to.
+/// never modifies them. They can also be streamed, given by a function that a save calls for each chunk in order, so
+/// that a unit larger than memory is written with the memory of a chunk (image_fill, table_rows); reserved, an image
+/// whose data an editor fills later, region by region (add_reserved_image()); or copied, a unit of a file as it is,
+/// read when the file is saved (add_hdu()). save() formats every header before it writes anything, and throws
+/// validation_error, naming the unit and the keyword, for a model that the standard forbids: a keyword, a value or a
+/// comment that no record can hold, a structural keyword in a header, a scaling, a BLANK, a TNULLn or a compression
+/// that the data cannot have. The headers of streamed units are completed once their data are written: their checksums,
+/// and the NAXIS2 or the heap of a table whose rows or arrays are known only then, which a sink that can rewrite takes.
+/// A writer is thread-compatible, like a standard container: save() can run on several threads at once, and calls the
+/// functions of streamed units from each, and a change needs exclusive access. It can be moved, and a moved-from writer
+/// can only be destroyed or assigned to.
 class OPENFITS_API writer
 {
 public:
@@ -158,14 +232,14 @@ public:
     /// the header gives info.scaling as it is.
     /// @throws usage_error (errc::invalid_argument) when data does not hold the values of the axes, a scaling is given
     ///         without info.bitpix, options.scaling is raw or override without info.bitpix, or options.override_scaling
-    ///         of override has a scale of 0 or a value that is not finite; (errc::arithmetic_overflow) when the data do
-    ///         not fit in 64 bits.
-    /// @throws validation_error for an image that the standard forbids: more than 999 axes, a BSCALE of 0 or a scaling
-    ///         that is not finite, or a BLANK with floating-point data or beyond the range of the stored type.
+    ///         of override has a scale of 0 or a value that is not finite.
+    /// @throws validation_error for an image that the standard forbids: more than 999 axes, data of more than 2^64
+    ///         bytes, a BSCALE of 0 or a scaling that is not finite, or a BLANK with floating-point data or beyond the
+    ///         range of the stored type; and for a compression that options ask for, the errors of compression_options.
     template <numeric_value T>
     std::size_t add_image(image_info info, std::span<const T> data, image_write_options options = {})
     {
-        return add_values(std::move(info), numeric_type_of<T>(), std::as_bytes(data), std::move(options));
+        return add_values(std::move(info), numeric_type_of<T>(), std::as_bytes(data), {}, std::move(options));
     }
 
     /// Adds an image with values that are not const, such as std::span(values) of a std::vector that is not const, as
@@ -183,6 +257,38 @@ public:
     ///         of the values of type; and the exceptions of the other add_image().
     std::size_t add_image(image_info info, numeric_type type, std::span<const std::byte> data,
                           image_write_options options = {});
+
+    /// Adds an image whose values a save takes from fill, chunk after chunk, as values of type in the byte order of the
+    /// host, and writes as add_image() writes values in memory: the same bytes, with the memory of a chunk.
+    /// Uncompressed, each chunk is written as it is filled, and with checksums the header completed once the data are
+    /// written, which a sink that can rewrite takes. Compressed, the tiles of each band of rows are compressed as its
+    /// chunks are filled, and the compressed data held, as for values in memory, until the unit is written: size() and
+    /// header_records() then call fill too.
+    /// @throws usage_error (errc::invalid_argument) when fill is empty, and the exceptions of the other add_image().
+    std::size_t add_image(image_info info, numeric_type type, image_fill fill, image_write_options options = {});
+
+    /// Adds an image whose values a save takes from fill, called with a std::span<T> of each chunk to fill, as the
+    /// add_image() of an image_fill does, such as add_image<float>(info, fill).
+    template <numeric_value T, typename Function>
+        requires std::invocable<Function&, std::uint64_t, std::span<T>>
+    std::size_t add_image(image_info info, Function fill, image_write_options options = {})
+    {
+        image_fill typed = [function = std::move(fill)](std::uint64_t first, std::span<std::byte> values) mutable {
+            // The chunks of a save are allocated for values of the largest type, so that they are aligned for T.
+            void* chunk = values.data();
+            function(first, std::span<T>(static_cast<T*>(chunk), values.size() / sizeof(T)));
+        };
+        return add_image(std::move(info), numeric_type_of<T>(), std::move(typed), std::move(options));
+    }
+
+    /// Adds an image without values whose data are reserved, uncompressed whatever the options of the save say: zeros
+    /// or undefined values, as options.fill says, which an editor then fills in place, region by region, so that an
+    /// output such as a stacked frame or a mosaic is written once without being held in memory whole. The zeros are
+    /// written in large chunks, or as a file made longer where the sink allows it (output_sink::write_zeros()). info
+    /// gives the BITPIX of the data, and the scaling and BLANK that the header gives.
+    /// @throws usage_error (errc::invalid_argument) when info has no BITPIX, or no BLANK for options.fill
+    ///         undefined_values of integer data; and validation_error as add_image() does.
+    std::size_t add_reserved_image(image_info info, reserved_image_options options = {});
 
     /// Adds a unit of a header alone, without data, after the units added so far: the primary HDU with BITPIX = 8 and
     /// NAXIS = 0 when it is the first, as files of extensions begin, and an IMAGE extension of NAXIS = 0 otherwise.
@@ -216,13 +322,44 @@ public:
     ///         TDIMn larger than its field, a TSCALn of 0 or a scaling that is not finite.
     std::size_t add_table(table_info info, std::span<const column_values> values, table_write_options options = {});
 
+    /// Adds a table whose rows a save takes from rows, chunk after chunk, and writes as add_table() writes values in
+    /// memory, with the memory of a chunk: the rows of each chunk are written as they come. info gives the format of
+    /// every column, since the header is written before the rows, and the number of rows when it is not 0: rows then
+    /// gives exactly as many; with 0, the table ends when rows gives none, and its NAXIS2 is written once they are
+    /// written. A table with variable-length arrays needs its number of rows: its rows are written as zeros, then each
+    /// chunk's rows once their arrays are in the heap, and the size of the heap and the emax of each column once they
+    /// are all written. A streamed table is never compressed, as an ASCII table is not.
+    /// @throws usage_error (errc::invalid_argument) when rows is empty, a column has no format, or a table with
+    ///         variable-length arrays has no number of rows; and the exceptions of the other add_table().
+    std::size_t add_table(table_info info, table_rows rows, const table_write_options& options = {});
+
+    /// Adds a copy of the unit at index of source after the units added so far, which a save reads from source as it
+    /// writes it: its header and its data as they are, byte for byte, compressed tiles and extensions of unknown types
+    /// included, so that its checksums stay what they were. The reader is borrowed: it must stay valid until the last
+    /// save().
+    ///
+    /// A unit placed where its kind cannot be is converted as it is written: the primary HDU of an image after the
+    /// first unit becomes an IMAGE extension, its XTENSION, PCOUNT and GCOUNT in place of SIMPLE and EXTEND, and an
+    /// IMAGE extension added first the primary HDU, its SIMPLE and EXTEND in place of XTENSION, PCOUNT and GCOUNT; any
+    /// other extension added first comes after a primary HDU of NAXIS = 0, as add_table() adds one. Its header is then
+    /// written anew, its cards in their order, as it is when the save asks for checksums or replaces bytes outside
+    /// printable ASCII; options.header replaces its cards but the structural ones, which come first, as the unit has
+    /// them. A header written anew gets CHECKSUM and DATASUM computed again when the unit had them or the save asks for
+    /// them. Returns the index of the copy.
+    /// @throws usage_error (errc::invalid_argument) for random groups placed after the first unit, which only a primary
+    ///         HDU holds (standard §6), and the exceptions of reader::hdu(); invalid_data_error when the header of the
+    ///         unit gives no size for its data.
+    std::size_t add_hdu(const reader& source, std::size_t index, hdu_copy_options options = {});
+
     /// The number of units added.
     [[nodiscard]] std::size_t hdu_count() const noexcept;
 
     /// Writes the file to path, which is UTF-8 on every platform and the name of the file, brackets included, through
     /// file_sink: the file is replaced, or created, only once it is complete, so that a failed or cancelled save
     /// leaves the old one, or none; options.if_exists refuses an existing file instead.
-    /// @throws usage_error when path is empty or not valid UTF-8, or the writer has no unit.
+    /// @throws usage_error when path is empty or not valid UTF-8, or the writer has no unit; (errc::invalid_argument)
+    ///         when a streamed table gives rows of other columns than its model, or another number of rows than it
+    ///         says, or options.gzip_level is not from -1 to 9.
     /// @throws validation_error when a header cannot be written; nothing is written then.
     /// @throws invalid_data_error with errc::value_out_of_range for a value beyond the stored type when its options do
     ///         not clamp it, and errc::undefined_value for a NaN in integer data without BLANK.
@@ -232,14 +369,20 @@ public:
     void save(std::string_view path, const write_options& options = {}) const;
 
     /// Writes the file to sink, in order, then calls its finish(), with the exceptions of the other save() and those of
-    /// the sink, which pass through unchanged. The sink needs no rewrite(): with checksums, the writer rewrites the
-    /// checksum cards of each header once its data are written when the sink can, and sums the data before it writes
-    /// anything otherwise. A failure may leave part of the file in it.
+    /// the sink, which pass through unchanged; with options.gzip_level, through a gzip_sink over it. With checksums,
+    /// the writer rewrites the checksum cards of each header once its data are written when the sink can, and sums the
+    /// data before it writes anything otherwise. A failure may leave part of the file in it.
+    /// @throws usage_error (errc::invalid_argument), before anything is written, when the sink cannot rewrite and a
+    ///         header needs it: a streamed unit with checksums, a streamed table whose rows are not counted in its
+    ///         model, or that has variable-length arrays.
     void save(output_sink& sink, const write_options& options = {}) const;
 
     /// The bytes of the file that save() with options writes, its headers formatted as save() formats them: room to
-    /// reserve before a save, as memory_sink::reserve() takes it.
-    /// @throws usage_error when the writer has no unit, and validation_error when a header cannot be written.
+    /// reserve before a save, as memory_sink::reserve() takes it. With options.gzip_level, the bytes before their
+    /// compression.
+    /// @throws usage_error when the writer has no unit, or (errc::invalid_argument) a streamed table that does not say
+    ///         its number of rows, whose size is known once it is written; and validation_error when a header cannot be
+    ///         written.
     [[nodiscard]] std::uint64_t size(const write_options& options = {}) const;
 
     /// The records of the header of the unit at index as save() with options writes it, END included and the fill of
@@ -249,7 +392,7 @@ public:
     [[nodiscard]] std::size_t header_records(std::size_t index, const write_options& options = {}) const;
 
 private:
-    std::size_t add_values(image_info info, numeric_type type, std::span<const std::byte> data,
+    std::size_t add_values(image_info info, numeric_type type, std::span<const std::byte> data, image_fill fill,
                            image_write_options options);
 
     struct state;

@@ -201,7 +201,7 @@ TEST_P(samples_headers, read_their_cards_as_astropy_does)
 TEST_P(samples_headers, keep_the_records_they_were_read_from)
 {
     const sample& unit = GetParam();
-    const std::string bytes = openfits::test::read_file(openfits::test::path_of(openfits::test::sample_path(unit)));
+    const std::string bytes = openfits::test::sample_content(unit);
     const reader file(openfits::test::sample_path(unit));
     for (const hdu_info& hdu : file.hdus()) {
         std::string text;

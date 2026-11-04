@@ -41,6 +41,15 @@ struct card_access
 /// is appended to departures, with the keyword in its context.
 [[nodiscard]] card parse_record(std::string_view record, std::vector<diagnostic>& departures);
 
+/// What a record does with the bytes outside printable ASCII of its strings, comments and texts, which standard
+/// §4.1.2.3 does not allow in a header.
+enum class byte_policy : std::uint8_t
+{
+    refuse,  ///< validation_error with errc::invalid_character.
+    replace, ///< Each written as a question mark.
+    keep,    ///< Written as they are.
+};
+
 /// How write_value_record() and write_commentary_record() write what does not fit the standard's own forms.
 struct record_options
 {
@@ -51,9 +60,19 @@ struct record_options
     /// The long string of a reserved keyword that is not structural is continued over CONTINUE records, rather than
     /// refused (standard §4.2.1.2).
     bool continue_reserved = false;
+    /// The bytes outside printable ASCII of strings, comments, texts, and of the records of cards read from a file. A
+    /// keyword name never takes them.
+    byte_policy non_ascii = byte_policy::refuse;
     /// The unit of the card, which the context of the errors names.
     std::optional<std::uint64_t> hdu{};
 };
+
+/// text with its bytes outside printable ASCII as options say: unchanged when it has none, or kept; with question marks
+/// for them when replaced.
+/// @throws validation_error with errc::invalid_character, where as its context, when it has some and options refuse
+///         them; what names text in the message.
+[[nodiscard]] std::string ascii_text(std::string_view text, const record_options& options, const error_context& where,
+                                     std::string_view what);
 
 /// The keyword of these functions is the name a card keeps, which they put in upper case with single spaces only: a
 /// prefix HIERARCH that it still has is part of the name.
@@ -69,6 +88,14 @@ struct record_options
 [[nodiscard]] std::string write_value_record(std::string_view keyword, const card_value& value,
                                              std::string_view comment, const record_options& options);
 
+/// The record of a card of card::with_value_text(): as write_value_record() makes it, with text in the place of the
+/// value that it formats, as it is; kind is that of the value of the text, which a string or an undefined value does
+/// not right-justify.
+/// @throws validation_error as write_value_record() does, and with the errors of check_value_text() for a text that is
+///         not one value of standard §4.2.
+[[nodiscard]] std::string write_value_text_record(std::string_view keyword, std::string_view text, value_kind kind,
+                                                  std::string_view comment, const record_options& options);
+
 /// The record of a commentary card: the name in bytes 1 to 8, the text in bytes 9 to 80.
 /// @throws validation_error with the keyword in its context: errc::invalid_keyword for a name that is not of standard
 /// §4.1.2.1, or that is CONTINUE or END, which the writer generates; errc::invalid_value_indicator for a text that
@@ -77,8 +104,8 @@ struct record_options
 [[nodiscard]] std::string write_commentary_record(std::string_view keyword, std::string_view text,
                                                   const record_options& options);
 
-/// The record of a card: the record it was read from, or the record that write_value_record() or
-/// write_commentary_record() makes of it.
+/// The record of a card: the record it was read from, its bytes outside printable ASCII as options say, or the record
+/// that write_value_record(), write_value_text_record() or write_commentary_record() makes of it.
 [[nodiscard]] std::string write_record(const card& value, const record_options& options);
 
 } // namespace openfits::detail

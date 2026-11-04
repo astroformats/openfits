@@ -66,30 +66,40 @@ TEST(card, parse_keeps_the_record_padded_to_80_characters)
     EXPECT_EQ(exposure.value(), card_value(300.0));
 }
 
+// A card of a value text keeps the text, which the writer writes as it is, and has no record of its own: the save makes
+// it under its options (record_writer.a_value_text_is_written_as_it_is).
 TEST(card, a_card_of_a_value_text_keeps_the_text)
 {
-    // The record that the writer would make: a number right-justified in bytes 11 to 30, a string from byte 11.
-    const card exposure = card::with_value_text("exposure", "1.50E+03", "[s] time");
+    const card exposure = card::with_value_text("exposure", " 1.50E+03 ", "[s] time");
     EXPECT_EQ(exposure.keyword(), "EXPOSURE");
-    EXPECT_EQ(exposure.text().substr(0, 41), "EXPOSURE=             1.50E+03 / [s] time");
+    EXPECT_TRUE(exposure.text().empty());
+    EXPECT_TRUE(exposure.has_value_indicator());
     EXPECT_EQ(exposure.value_text(), "1.50E+03");
     EXPECT_EQ(exposure.value(), card_value(1500.0));
     EXPECT_EQ(exposure.comment(), "[s] time");
-    const card object = card::with_value_text("OBJECT", "'M 31'");
-    EXPECT_EQ(object.text().substr(0, 16), "OBJECT  = 'M 31'");
-    EXPECT_EQ(object.value(), card_value("M 31"));
-    // A value field of none of the forms is kept as its text.
-    EXPECT_EQ(card::with_value_text("GAIN", "1,5").value_text(), "1,5");
+    EXPECT_EQ(exposure.unit(), "s");
+    EXPECT_EQ(card::with_value_text("OBJECT", "'M 31'").value(), card_value("M 31"));
+    EXPECT_EQ(card::with_value_text("BLANKED", "").value(), card_value(openfits::undefined));
+    // A name of the HIERARCH convention, a comment of any length and bytes outside printable ASCII are the save's to
+    // write or refuse, as its options say.
+    const card hierarch = card::with_value_text("HIERARCH ESO DET DIT", "1.5", std::string(90, 'c') + "\xE9");
+    EXPECT_EQ(hierarch.keyword(), "ESO DET DIT");
+    EXPECT_EQ(hierarch.comment().size(), 91U);
+    // A text of none of the forms, or of more than one value, has no value; the writer refuses it.
+    for (const char* text : {"1,5", "1 / 2", "1 2"}) {
+        const card wrong = card::with_value_text("GAIN", text);
+        EXPECT_EQ(wrong.value_text(), text);
+        EXPECT_EQ(wrong.value().kind(), value_kind::none) << text;
+    }
+    // A value text longer than a record is kept whole.
+    const std::string long_text = "'" + std::string(300, 'x') + "'";
+    EXPECT_EQ(card::with_value_text("NOTE", long_text).value_text(), long_text);
 
-    for (const char* keyword : {"COMMENT", "HISTORY", "", "CONTINUE", "END", "ESO DET DIT", "TOOLONGNAME"}) {
+    for (const char* keyword : {"COMMENT", "HISTORY", "", "CONTINUE", "END"}) {
         EXPECT_TRUE(throws<openfits::usage_error>(errc::invalid_keyword, [&] {
             (void)card::with_value_text(keyword, "1");
         })) << keyword;
     }
-    EXPECT_TRUE(throws<openfits::validation_error>(errc::invalid_character,
-                                                   [] { (void)card::with_value_text("A", "1", "caf\xE9"); }));
-    EXPECT_TRUE(throws<openfits::validation_error>(
-        errc::value_too_long, [] { (void)card::with_value_text("A", "1", std::string(60, 'c')); }));
 }
 
 TEST(card, parse_refuses_a_record_longer_than_80_characters)

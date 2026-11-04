@@ -57,6 +57,10 @@ public:
     /// Adds bytes that follow those added so far.
     void add(std::span<const std::byte> bytes) noexcept;
 
+    /// Adds count zero bytes that follow those added so far, which change no sum but the places of the bytes after
+    /// them.
+    void add_zeros(std::uint64_t count) noexcept;
+
     /// The sum of the bytes added so far.
     [[nodiscard]] std::uint32_t sum() const noexcept;
 
@@ -74,7 +78,13 @@ public:
     explicit summing_sink(output_sink* target = nullptr) noexcept : target_(target) {}
 
     void write(std::span<const std::byte> data) override;
+    /// The zeros of the target, which add nothing to the sum.
+    void write_zeros(std::uint64_t count) override;
     [[nodiscard]] std::uint64_t position() const override;
+    /// Whether the target can rewrite.
+    [[nodiscard]] bool can_rewrite() const override;
+    /// Rewrites bytes of the target, which the sum does not see: the caller adds what they change to it.
+    void rewrite(std::uint64_t offset, std::span<const std::byte> data) override;
 
     /// The sum of the bytes written.
     [[nodiscard]] std::uint32_t sum() const noexcept

@@ -86,7 +86,8 @@ void check_record(std::string_view input)
     for (const diagnostic& departure : departures) {
         require(departure.context.keyword == first.keyword());
     }
-    require(detail::write_record(first, {}) == record);
+    // A record read is written back as it is, its bytes outside printable ASCII too when they are kept.
+    require(detail::write_record(first, {.non_ascii = detail::byte_policy::keep}) == record);
 
     if (!first.has_value_indicator() && first.value().kind() != value_kind::none) {
         // A CONTINUE record, which only a header writes again.
