@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <openfits/io.h>
+
 #include <cstddef>
 #include <memory>
 #include <span>
@@ -49,6 +51,61 @@ private:
     struct state;
     std::unique_ptr<state> state_;
     std::size_t max_piece_;
+};
+
+/// Inflates a gzip file (RFC 1952) given in pieces: its members one after the other, as gzip(1) inflates them, each
+/// checked against its CRC-32 and its length by zlib; zero bytes after the last member are ignored, as the padding of a
+/// tape, and other bytes refused. Its failures are those of gzip_decompress(), with the offset in the input where the
+/// inflation stopped as their context. zlib gets the input and the output in pieces of at most max_piece bytes.
+class gzip_file_inflater
+{
+public:
+    explicit gzip_file_inflater(std::size_t max_piece = zlib_max_piece);
+    gzip_file_inflater(const gzip_file_inflater&) = delete;
+    gzip_file_inflater& operator=(const gzip_file_inflater&) = delete;
+    gzip_file_inflater(gzip_file_inflater&&) = delete;
+    gzip_file_inflater& operator=(gzip_file_inflater&&) = delete;
+    ~gzip_file_inflater();
+
+    /// The next piece of the input, after the pieces given so far, which must stay valid until needs_input().
+    void give(std::span<const std::byte> input) noexcept;
+
+    /// True when the input given so far is used up.
+    [[nodiscard]] bool needs_input() const noexcept;
+
+    /// Inflates into output as far as the input given allows, and returns the number of bytes written: fewer than
+    /// output.size() only when the input given is used up.
+    std::size_t inflate(std::span<std::byte> output);
+
+    /// Checks that the input, given whole, ends after a member: throws when it ends within one, or held none.
+    void finish() const;
+
+private:
+    struct state;
+    std::unique_ptr<state> state_;
+};
+
+/// Compresses bytes given in pieces into one gzip member (RFC 1952) at a level of zlib, from 0 to 9 or -1 for its
+/// default, its header that of gzip_encoder, and writes the compressed bytes to target as they come.
+class gzip_member_deflater
+{
+public:
+    gzip_member_deflater(int level, output_sink& target, std::size_t max_piece = zlib_max_piece);
+    gzip_member_deflater(const gzip_member_deflater&) = delete;
+    gzip_member_deflater& operator=(const gzip_member_deflater&) = delete;
+    gzip_member_deflater(gzip_member_deflater&&) = delete;
+    gzip_member_deflater& operator=(gzip_member_deflater&&) = delete;
+    ~gzip_member_deflater();
+
+    /// Compresses input, which follows the bytes given so far.
+    void compress(std::span<const std::byte> input);
+
+    /// Ends the member: writes the rest of the compressed bytes and the trailer of the member.
+    void finish();
+
+private:
+    struct state;
+    std::unique_ptr<state> state_;
 };
 
 } // namespace openfits::detail

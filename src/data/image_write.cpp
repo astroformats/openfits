@@ -5,6 +5,8 @@
 
 #include <openfits/error.h>
 
+#include "core/checked_math.h"
+#include "core/endian.h"
 #include "core/scratch_buffer.h"
 
 #include <algorithm>
@@ -12,6 +14,8 @@
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -129,30 +133,47 @@ bitpix model_bitpix(const image_info& image)
     return *image.bitpix;
 }
 
-image_info resolve_image(image_info info, numeric_type type, std::uint64_t values, std::uint64_t hdu)
+image_info resolve_image(image_info info, std::optional<numeric_type> type, std::optional<std::uint64_t> values,
+                         std::uint64_t hdu)
 {
     const error_context where{.hdu = hdu};
-    if (info.geometry.axes.size() > 999) {
+    const std::vector<std::uint64_t>& axes = info.geometry.axes;
+    if (axes.size() > 999) {
         throw validation_error(errc::invalid_structure,
                                "an image has at most 999 axes (standard §4.4.1.1), and that of unit " +
-                                   std::to_string(hdu) + " has " + std::to_string(info.geometry.axes.size()),
+                                   std::to_string(hdu) + " has " + std::to_string(axes.size()),
                                {.hdu = hdu, .keyword = "NAXIS"});
     }
-    const std::uint64_t count = info.geometry.element_count();
-    if (values != count) {
+    // The product of the axes, which no data unit of more than 2^64 bytes can hold (standard §3.3.2, Eq. 1).
+    std::uint64_t count = axes.empty() ? 0 : 1;
+    for (const std::uint64_t length : axes) {
+        if (length != 0 && count > std::numeric_limits<std::uint64_t>::max() / length) {
+            throw validation_error(errc::invalid_structure,
+                                   "the axes of the image of unit " + std::to_string(hdu) +
+                                       " hold more than 2^64 values",
+                                   {.hdu = hdu, .keyword = "NAXIS"});
+        }
+        count *= length;
+    }
+    if (values && *values != count) {
         throw usage_error(errc::invalid_argument,
-                          "the data hold " + std::to_string(values) + " values, and the axes of the image of unit " +
+                          "the data hold " + std::to_string(*values) + " values, and the axes of the image of unit " +
                               std::to_string(hdu) + " have " + std::to_string(count),
                           where);
     }
     if (!info.bitpix) {
+        if (!type) {
+            throw usage_error(
+                errc::invalid_argument,
+                "the reserved image of unit " + std::to_string(hdu) + " has no BITPIX, which no values give it", where);
+        }
         if (info.scaling != scaling{}) {
             throw usage_error(errc::invalid_argument,
                               "the image of unit " + std::to_string(hdu) +
                                   " has a scaling and no BITPIX, which the scaling converts its values into",
                               where);
         }
-        const storage stored = storage_of(type);
+        const storage stored = storage_of(*type);
         info.bitpix = stored.bitpix;
         info.scaling.zero = stored.zero;
     }
@@ -186,11 +207,47 @@ image_info resolve_image(image_info info, numeric_type type, std::uint64_t value
                                    {.hdu = hdu, .keyword = "BLANK"});
         }
     }
-    if (count > std::numeric_limits<std::uint64_t>::max() / stored_size(*info.bitpix) - block_size) {
-        throw usage_error(errc::arithmetic_overflow,
-                          "the data of the image of unit " + std::to_string(hdu) + " do not fit in 64 bits", where);
+    if (count > (std::numeric_limits<std::uint64_t>::max() - block_size) / stored_size(*info.bitpix)) {
+        throw validation_error(errc::invalid_structure,
+                               "the data of the image of unit " + std::to_string(hdu) + " take more than 2^64 bytes",
+                               {.hdu = hdu, .keyword = "NAXIS"});
     }
     return info;
+}
+
+image_values borrowed_values(std::span<const std::byte> data, numeric_type type)
+{
+    const std::size_t size = size_of(type);
+    return [data, size](std::uint64_t first, std::size_t count) {
+        return data.subspan(checked_cast<std::size_t>(first) * size, count * size);
+    };
+}
+
+image_values streamed_values(const std::function<void(std::uint64_t, std::span<std::byte>)>& fill, numeric_type type)
+{
+    // The chunk, shared by the copies of the function, grows to the largest run asked for. Its memory is that of new[],
+    // aligned for values of any numeric type.
+    auto chunk = std::make_shared<scratch_buffer>(0);
+    const std::size_t size = size_of(type);
+    return [&fill, chunk, size](std::uint64_t first, std::size_t count) -> std::span<const std::byte> {
+        const std::size_t bytes = count * size;
+        if (chunk->bytes().size() < bytes) {
+            *chunk = scratch_buffer(bytes);
+        }
+        const std::span<std::byte> values = chunk->bytes().first(bytes);
+        fill(first, values);
+        return values;
+    };
+}
+
+std::uint64_t run_length(std::uint64_t first, std::uint64_t count, std::uint64_t row, std::size_t value_size,
+                         std::size_t transfer) noexcept
+{
+    std::uint64_t run = std::max<std::uint64_t>(1, transfer / std::max<std::size_t>(value_size, 1));
+    if (row > 0 && row <= run && first % row == 0) {
+        run = run / row * row;
+    }
+    return std::min(run, count - first);
 }
 
 std::vector<card> image_cards(const image_info& image, bool primary)
@@ -234,43 +291,92 @@ std::uint64_t padded_data_size(bitpix stored, std::uint64_t count) noexcept
     return (size + block_size - 1) / block_size * block_size;
 }
 
-void write_image_data(output_sink& sink, const write_conversion& conversion, numeric_type type,
-                      std::span<const std::byte> data, const std::function<void(std::uint64_t)>& advance,
+void write_image_data(output_sink& sink, const write_conversion& conversion, numeric_type type, std::uint64_t count,
+                      std::uint64_t row, const image_values& values, const std::function<void(std::uint64_t)>& advance,
                       std::size_t transfer)
 {
     const std::size_t from = size_of(type);
     const std::size_t to = stored_size(conversion.to);
-    const std::size_t count = data.size() / from;
     // Values written as they are: of one byte, or in the byte order of the file, without a conversion.
     const bool as_they_are = conversion.arithmetic == arithmetic::identity && stored_type(conversion.to) == type &&
                              (to == 1 || std::endian::native == std::endian::big);
-    const std::size_t piece = std::max<std::size_t>(1, transfer / std::max(from, to));
-    if (as_they_are) {
-        for (std::size_t done = 0; done < count;) {
-            const std::size_t values = std::min(piece, count - done);
-            sink.write(data.subspan(done * from, values * from));
-            done += values;
-            advance(values * to);
-        }
-    } else if (count > 0) {
-        scratch_buffer staging(std::min(piece, count) * to);
-        for (std::size_t done = 0; done < count;) {
-            const std::size_t values = std::min(piece, count - done);
-            const std::span<std::byte> bytes = staging.bytes().first(values * to);
-            (void)convert_write(conversion, data.data() + (done * from), bytes.data(), values);
+    std::optional<scratch_buffer> staging;
+    for (std::uint64_t done = 0; done < count;) {
+        const auto run = checked_cast<std::size_t>(run_length(done, count, row, std::max(from, to), transfer));
+        const std::span<const std::byte> given = values(done, run);
+        if (as_they_are) {
+            sink.write(given);
+        } else {
+            if (!staging) {
+                staging.emplace(run * to);
+            }
+            const std::span<std::byte> bytes = staging->bytes().first(run * to);
+            (void)convert_write(conversion, given.data(), bytes.data(), run);
             sink.write(bytes);
-            done += values;
-            advance(values * to);
         }
+        done += run;
+        advance(std::uint64_t{run} * to);
     }
     // The zeros of the last block (standard §3.3.2).
     static constexpr std::array<std::byte, block_size> zeros{};
-    const std::uint64_t size = std::uint64_t{count} * to;
+    const std::uint64_t size = count * to;
     const std::uint64_t fill = (block_size - (size % block_size)) % block_size;
     if (fill > 0) {
         sink.write(std::span<const std::byte>(zeros).first(fill));
         advance(fill);
     }
+}
+
+void write_reserved_data(output_sink& sink, bitpix stored, std::uint64_t count, bool undefined_values,
+                         std::optional<std::int64_t> blank, const std::function<void(std::uint64_t)>& advance,
+                         std::size_t transfer)
+{
+    const std::size_t width = stored_size(stored);
+    const std::uint64_t padded = padded_data_size(stored, count);
+    if (!undefined_values || count == 0) {
+        sink.write_zeros(padded);
+        advance(padded);
+        return;
+    }
+    // The undefined value of the data, big-endian: BLANK, or the quiet NaN of IEEE 754 (standard §5.3).
+    std::array<std::byte, 8> value{};
+    switch (stored) {
+    case bitpix::uint8:
+        value[0] = static_cast<std::byte>(static_cast<std::uint8_t>(blank.value_or(0)));
+        break;
+    case bitpix::int16:
+        store_big_endian(std::span(value).first<2>(), static_cast<std::uint16_t>(blank.value_or(0)));
+        break;
+    case bitpix::int32:
+        store_big_endian(std::span(value).first<4>(), static_cast<std::uint32_t>(blank.value_or(0)));
+        break;
+    case bitpix::int64:
+        store_big_endian(std::span(value).first<8>(), static_cast<std::uint64_t>(blank.value_or(0)));
+        break;
+    case bitpix::float32:
+        store_big_endian(std::span(value).first<4>(), std::uint32_t{0x7FC0'0000});
+        break;
+    case bitpix::float64:
+        store_big_endian(std::span(value).first<8>(), std::uint64_t{0x7FF8'0000'0000'0000});
+        break;
+    }
+    const std::uint64_t per_chunk = std::max<std::uint64_t>(1, transfer / width);
+    scratch_buffer chunk(checked_cast<std::size_t>(std::min(per_chunk, count) * width));
+    const std::span<std::byte> bytes = chunk.bytes();
+    for (std::size_t at = 0; at < bytes.size(); at += width) {
+        std::copy_n(value.begin(), width, bytes.begin() + static_cast<std::ptrdiff_t>(at));
+    }
+    for (std::uint64_t done = 0; done < count;) {
+        const std::uint64_t run = std::min(per_chunk, count - done);
+        sink.write(bytes.first(checked_cast<std::size_t>(run * width)));
+        advance(run * width);
+        done += run;
+    }
+    // The zeros of the last block, fewer than a block, written as data as the fill of every unit is.
+    static constexpr std::array<std::byte, block_size> zeros{};
+    const std::uint64_t fill = padded - (count * width);
+    sink.write(std::span<const std::byte>(zeros).first(fill));
+    advance(fill);
 }
 
 } // namespace openfits::detail

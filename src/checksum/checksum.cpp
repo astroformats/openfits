@@ -131,6 +131,24 @@ std::uint32_t checksum_accumulator::sum() const noexcept
     return add_sums(sum_, pending_);
 }
 
+void checksum_accumulator::add_zeros(std::uint64_t count) noexcept
+{
+    // Zeros complete an integer that the last piece ended within, and whole integers of zeros add nothing; the bytes
+    // after them start where they end.
+    if (pending_bytes_ != 0) {
+        const std::uint64_t taken = std::min<std::uint64_t>(count, 4U - pending_bytes_);
+        pending_bytes_ += static_cast<unsigned>(taken);
+        count -= taken;
+        if (pending_bytes_ < 4) {
+            return;
+        }
+        sum_ = add_sums(sum_, pending_);
+        pending_ = 0;
+        pending_bytes_ = 0;
+    }
+    pending_bytes_ = static_cast<unsigned>(count % 4U);
+}
+
 void summing_sink::write(std::span<const std::byte> data)
 {
     if (target_ != nullptr) {
@@ -138,6 +156,29 @@ void summing_sink::write(std::span<const std::byte> data)
     }
     sum_.add(data);
     written_ += data.size();
+}
+
+void summing_sink::write_zeros(std::uint64_t count)
+{
+    if (target_ != nullptr) {
+        target_->write_zeros(count);
+    }
+    sum_.add_zeros(count);
+    written_ += count;
+}
+
+bool summing_sink::can_rewrite() const
+{
+    return target_ != nullptr && target_->can_rewrite();
+}
+
+void summing_sink::rewrite(std::uint64_t offset, std::span<const std::byte> data)
+{
+    if (target_ == nullptr) {
+        output_sink::rewrite(offset, data);
+        return;
+    }
+    target_->rewrite(offset, data);
 }
 
 std::uint64_t summing_sink::position() const
@@ -230,12 +271,12 @@ void check_checksum_keywords(const header& cards, std::optional<std::uint32_t> h
     if (const std::optional<std::size_t> position = valued(cards, "DATASUM"); position && datasum.known) {
         const value_kind kind = cards[*position].value().kind();
         if (kind == value_kind::integer && datasum.value) {
-            log.warning(errc::reserved_keyword,
+            log.warning(errc::reserved_keyword, "4.4.2.7",
                         "DATASUM holds an integer, where the standard requires a string of its digits; it is read as "
                         "the sum it gives",
                         at(*position));
         } else if (!datasum.value) {
-            log.warning(errc::reserved_keyword,
+            log.warning(errc::reserved_keyword, "4.4.2.7",
                         "DATASUM holds " +
                             (kind == value_kind::string ? quote(string_of(cards, *position)) : std::string("a value")) +
                             ", which is not the decimal number of a 32-bit sum: the data of the unit cannot match it",
@@ -247,11 +288,12 @@ void check_checksum_keywords(const header& cards, std::optional<std::uint32_t> h
         return;
     }
     if (cards[*position].value().kind() != value_kind::string) {
-        log.warning(errc::reserved_keyword, "CHECKSUM does not hold a string, as the standard requires", at(*position));
+        log.warning(errc::reserved_keyword, "4.4.2.7", "CHECKSUM does not hold a string, as the standard requires",
+                    at(*position));
     }
     // The data records sum to what DATASUM records, unless they changed too, which a read of the data finds.
     if (header_sum && datasum.value && add_sums(*header_sum, *datasum.value) != negative_zero) {
-        log.warning(errc::checksum_mismatch,
+        log.warning(errc::checksum_mismatch, "4.4.2.7",
                     "the header and the data that DATASUM records do not sum to negative zero, as CHECKSUM makes them: "
                     "the header changed after CHECKSUM was computed",
                     at(*position));

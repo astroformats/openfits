@@ -43,9 +43,10 @@ constexpr std::uint64_t descriptor_limit = 0x7FFF'FFFF;
 // row or at least 4, as fpack chooses them, and 17 when none does.
 constexpr std::array<std::uint64_t, 9> hcompress_rows{16, 24, 20, 30, 28, 26, 22, 18, 14};
 
+// A compression that the image cannot take, which names its algorithm.
 [[noreturn]] void invalid(std::uint64_t hdu, const std::string& message)
 {
-    throw validation_error(errc::invalid_compression, message, {.hdu = hdu});
+    throw validation_error(errc::invalid_compression, message, {.hdu = hdu, .keyword = "ZCMPTYPE"});
 }
 
 [[noreturn]] void bad_option(std::uint64_t hdu, const std::string& message)
@@ -132,7 +133,9 @@ struct image_plan
     const image_info& image;
     const write_conversion& conversion;
     numeric_type type = numeric_type::uint8;
+    // The values of the batch of tiles being compressed, from the element origin of the image on.
     std::span<const std::byte> data{};
+    std::uint64_t origin = 0;
     const compression_options& options;
     tile_algorithm algorithm = tile_algorithm::rice;
     bitpix stored = bitpix::uint8;
@@ -185,7 +188,7 @@ void gather(const image_plan& plan, std::span<const std::uint64_t> start, std::s
             element += (start[a] + k[a]) * stride;
             stride *= axes[a];
         }
-        (void)convert_write(plan.conversion, plan.data.data() + (element * value_size),
+        (void)convert_write(plan.conversion, plan.data.data() + ((element - plan.origin) * value_size),
                             encoder.stored.data() + (position * width), size[0]);
         position += size[0];
         std::size_t a = 1;
@@ -492,6 +495,59 @@ std::uint32_t seed_from_data(const image_plan& plan, const tile_grid& grid)
     return dither_seed_of(encoder.doubles);
 }
 
+// The tiles of an image grouped in bands: the tiles that share their indices along every axis from band_axis on, which
+// cover a run of elements of the data, whole rows of them for an image of two axes or more (standard §10.1). The band
+// axis is the last along which tiles are longer than one element, the second at least: a band holds whole rows.
+class tile_bands
+{
+public:
+    tile_bands(const tile_grid& grid, std::span<const std::uint64_t> axes, std::span<const std::uint64_t> tiles)
+        : grid_(grid), axes_(axes.begin(), axes.end())
+    {
+        std::size_t band_axis = axes.size() > 1 ? 1U : 0U;
+        for (std::size_t a = 0; a < tiles.size(); ++a) {
+            if (tiles[a] > 1) {
+                band_axis = std::max(band_axis, a);
+            }
+        }
+        band_axis_ = band_axis;
+        per_band_ = 1;
+        below_ = 1;
+        for (std::size_t a = 0; a < band_axis; ++a) {
+            per_band_ *= (axes[a] + tiles[a] - 1) / tiles[a];
+            below_ *= axes[a];
+        }
+    }
+
+    // The tiles of each band.
+    [[nodiscard]] std::uint64_t tiles_per_band() const noexcept
+    {
+        return per_band_;
+    }
+
+    // The first element and the number of elements of the band of the tile first, the first tile of a band.
+    [[nodiscard]] std::pair<std::uint64_t, std::uint64_t> elements(std::uint64_t first) const
+    {
+        std::vector<std::uint64_t> start(axes_.size());
+        std::vector<std::uint64_t> size(axes_.size());
+        grid_.box(first, start, size);
+        std::uint64_t element = 0;
+        std::uint64_t stride = 1;
+        for (std::size_t a = 0; a < axes_.size(); ++a) {
+            element += start[a] * stride;
+            stride *= axes_[a];
+        }
+        return {element, axes_.empty() ? 0 : size[band_axis_] * below_};
+    }
+
+private:
+    const tile_grid& grid_;
+    std::vector<std::uint64_t> axes_;
+    std::size_t band_axis_ = 0;
+    std::uint64_t per_band_ = 1;
+    std::uint64_t below_ = 1;
+};
+
 void store_descriptor(std::span<std::byte> field, bool wide, std::uint64_t count, std::uint64_t offset)
 {
     if (wide) {
@@ -649,7 +705,7 @@ void check_compression(const compression_options& options, bitpix stored, std::s
 }
 
 compressed_unit compress_image(const image_info& image, const write_conversion& conversion, numeric_type type,
-                               std::span<const std::byte> data, const compression_options& options, bool primary,
+                               const image_values& values, const compression_options& options, bool primary,
                                std::uint64_t hdu, const std::function<void(std::uint64_t)>& advance)
 {
     const bitpix stored = model_bitpix(image);
@@ -658,12 +714,12 @@ compressed_unit compress_image(const image_info& image, const write_conversion& 
     const tile_algorithm algorithm = resolve_algorithm(options, stored);
     const std::vector<std::uint64_t> tiles = resolve_tiles(options, axes, algorithm, hdu);
     const tile_grid grid(axes, tiles);
+    const tile_bands bands(grid, axes, tiles);
     const std::size_t width = stored_size(stored);
 
     image_plan plan{.image = image,
                     .conversion = conversion,
                     .type = type,
-                    .data = data,
                     .options = options,
                     .algorithm = algorithm,
                     .stored = stored,
@@ -673,11 +729,12 @@ compressed_unit compress_image(const image_info& image, const write_conversion& 
                     .hcompress_scale = recorded_scale(options.hcompress_scale),
                     .hdu = hdu};
     const bool dithered = plan.quantized && options.quantize_method != quantization::no_dither;
-    if (dithered) {
-        plan.seed = options.dither_seed ? *options.dither_seed : seed_from_data(plan, grid);
+    if (dithered && options.dither_seed) {
+        plan.seed = *options.dither_seed;
     }
 
-    // The tiles, compressed in batches, each by the workers in parallel.
+    // The tiles, compressed in batches of whole bands, whose values the batch takes at once, each batch by the workers
+    // in parallel.
     const std::size_t workers = concurrency();
     // A deque, which builds them in place: the state of zlib does not move.
     std::deque<tile_encoder> encoders;
@@ -685,15 +742,32 @@ compressed_unit compress_image(const image_info& image, const write_conversion& 
         encoders.emplace_back(options.gzip_level.value_or(-1));
     }
     std::vector<encoded_tile> encoded(checked_cast<std::size_t>(grid.count()));
+    const std::uint64_t per_band = bands.tiles_per_band();
     std::uint64_t next = 0;
     while (next < grid.count()) {
         std::uint64_t end = next;
         std::uint64_t bytes = 0;
-        while (end < grid.count() && (end == next || bytes + (grid.elements(end) * width) <= batch_bytes)) {
-            bytes += grid.elements(end) * width;
-            ++end;
+        while (end < grid.count()) {
+            const std::uint64_t band_end = std::min(end + per_band, grid.count());
+            std::uint64_t band_bytes = 0;
+            for (std::uint64_t t = end; t < band_end; ++t) {
+                band_bytes += grid.elements(t) * width;
+            }
+            if (end != next && bytes + band_bytes > batch_bytes) {
+                break;
+            }
+            bytes += band_bytes;
+            end = band_end;
         }
         const std::uint64_t first = next;
+        // Bands are whole, so that the batch ends with the band of its last tile but per_band.
+        const std::uint64_t origin = bands.elements(first).first;
+        const std::pair<std::uint64_t, std::uint64_t> last = bands.elements(end - per_band);
+        plan.origin = origin;
+        plan.data = values(origin, checked_cast<std::size_t>(last.first + last.second - origin));
+        if (dithered && first == 0 && !options.dither_seed) {
+            plan.seed = seed_from_data(plan, grid);
+        }
         const std::size_t share = std::min<std::size_t>(workers, checked_cast<std::size_t>(end - first));
         parallel_for(share, [&](std::size_t worker) {
             std::vector<std::uint64_t> start(axes.size());

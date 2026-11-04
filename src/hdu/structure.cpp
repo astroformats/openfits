@@ -55,12 +55,14 @@ public:
     {
         unit_structure result;
         result.kind = index_ == 0 ? check_simple() : extension_kind();
+        kind_ = result.kind;
         const std::optional<std::int64_t> bitpix = read_bitpix();
         const axes_read axes = read_axes();
         const std::size_t naxis = axes.naxis.value_or(0);
         const bool groups = index_ == 0 && is_random_groups(axes);
         if (groups) {
             result.kind = hdu_kind::random_groups;
+            kind_ = result.kind;
         }
 
         std::optional<std::uint64_t> pcount = 0;
@@ -81,6 +83,7 @@ public:
         }
         read_name(result);
         check_reserved(result.kind, bitpix);
+        check_places(result.kind);
         check_contents(result.kind);
         return result;
     }
@@ -103,18 +106,40 @@ private:
         return quote(cards_[position].keyword());
     }
 
+    // The section of the standard that gives the mandatory keywords of the unit, as far as its kind is known.
+    [[nodiscard]] std::string_view mandatory_section() const noexcept
+    {
+        switch (kind_) {
+        case hdu_kind::primary:
+            return "4.4.1.1";
+        case hdu_kind::random_groups:
+            return "6.1.1";
+        case hdu_kind::image:
+            return "7.1.1";
+        case hdu_kind::table:
+            return "7.2.1";
+        case hdu_kind::bintable:
+        case hdu_kind::compressed_image:
+        case hdu_kind::compressed_table:
+            return "7.3.1";
+        case hdu_kind::unknown:
+            break;
+        }
+        return "4.4.1.2";
+    }
+
     // The place and the format of a mandatory keyword, at the record expected when the standard gives it one.
     void place(std::size_t position, std::optional<std::size_t> expected)
     {
         if (expected && position != *expected) {
-            log_.warning(errc::keyword_order,
+            log_.warning(errc::keyword_order, mandatory_section(),
                          "the mandatory keyword " + name_at(position) + " is record " + std::to_string(position + 1) +
                              " of the header, where the standard places it at record " + std::to_string(*expected + 1),
                          at(position));
         }
         const value_kind kind = cards_[position].value().kind();
         if (kind != value_kind::none && kind != value_kind::undefined && !card_access::fixed_format(cards_[position])) {
-            log_.info(errc::free_format,
+            log_.info(errc::free_format, "4.4.1",
                       "the value of the mandatory keyword " + name_at(position) +
                           " is not in the fixed format, which the standard requires of mandatory keywords",
                       at(position));
@@ -126,8 +151,8 @@ private:
     {
         const std::optional<std::size_t> position = cards_.index_of(keyword);
         if (!position) {
-            log_.error(errc::missing_keyword, "the mandatory keyword " + quote(keyword) + " is missing",
-                       about(keyword));
+            log_.error(errc::missing_keyword, mandatory_section(),
+                       "the mandatory keyword " + quote(keyword) + " is missing", about(keyword));
             return std::nullopt;
         }
         place(*position, expected);
@@ -149,11 +174,11 @@ private:
             converted = std::nullopt;
         }
         if (!converted) {
-            log_.error(errc::keyword_type, "the mandatory keyword " + name_at(position) + " holds no integer",
-                       at(position));
+            log_.error(errc::keyword_type, mandatory_section(),
+                       "the mandatory keyword " + name_at(position) + " holds no integer", at(position));
             return std::nullopt;
         }
-        log_.warning(errc::keyword_type,
+        log_.warning(errc::keyword_type, mandatory_section(),
                      "the mandatory keyword " + name_at(position) + " holds no integer, and is read as " +
                          std::to_string(*converted),
                      at(position));
@@ -168,7 +193,7 @@ private:
         const card_value& value = cards_[0].value();
         if (value.kind() == value_kind::logical) {
             if (!value.get<bool>()) {
-                log_.warning(errc::invalid_structure,
+                log_.warning(errc::invalid_structure, "4.4.1.1",
                              "SIMPLE is F, which says that the file does not conform to the standard; it is read as "
                              "one that does",
                              at(0));
@@ -176,10 +201,10 @@ private:
         } else if (value.kind() == value_kind::string &&
                    (value.get<std::string>() == "T" || value.get<std::string>() == "F")) {
             log_.warning(
-                errc::keyword_type,
+                errc::keyword_type, "4.4.1.1",
                 "SIMPLE holds the string " + quote(value.get<std::string>()) + ", which is read as the logical", at(0));
         } else {
-            log_.warning(errc::keyword_type, "SIMPLE holds no logical; the file is read as FITS", at(0));
+            log_.warning(errc::keyword_type, "4.4.1.1", "SIMPLE holds no logical; the file is read as FITS", at(0));
         }
         return hdu_kind::primary;
     }
@@ -190,7 +215,7 @@ private:
         place(0, std::size_t{0});
         const card& xtension = cards_[0];
         if (xtension.value().kind() != value_kind::string) {
-            log_.warning(errc::keyword_type,
+            log_.warning(errc::keyword_type, "4.4.1.2",
                          "XTENSION holds no string; the unit is read as an extension of unknown type", at(0));
             return hdu_kind::unknown;
         }
@@ -198,12 +223,12 @@ private:
         std::string upper = type;
         std::ranges::transform(upper, upper.begin(), to_upper);
         if (upper != type) {
-            log_.warning(errc::invalid_structure,
+            log_.warning(errc::invalid_structure, "4.4.1.2",
                          "XTENSION " + quote(type) + " is not in upper case, and is read as " + quote(upper), at(0));
         }
         // The value of XTENSION is padded to eight characters, its closing quote in byte 20 (standard §4.2.1.1).
         if (!xtension.value_text().empty() && xtension.value_text().size() < 10) {
-            log_.warning(errc::invalid_structure,
+            log_.warning(errc::invalid_structure, "4.2.1.1",
                          "XTENSION " + quote(type) + " is not padded with spaces to eight characters", at(0));
         }
         if (upper == "IMAGE") {
@@ -226,7 +251,7 @@ private:
         }
         const std::optional<std::int64_t> bitpix = integer_at(*position);
         if (bitpix && std::ranges::find(bitpix_values, *bitpix) == bitpix_values.end()) {
-            log_.error(errc::invalid_structure,
+            log_.error(errc::invalid_structure, "4.4.1.1",
                        "BITPIX is " + std::to_string(*bitpix) + ", which is none of 8, 16, 32, 64, -32 and -64",
                        at(*position));
             return std::nullopt;
@@ -246,8 +271,8 @@ private:
             return result;
         }
         if (*naxis < 0 || *naxis > max_naxis) {
-            log_.error(errc::invalid_structure, "NAXIS is " + std::to_string(*naxis) + ", which is not from 0 to 999",
-                       at(*position));
+            log_.error(errc::invalid_structure, "4.4.1.1",
+                       "NAXIS is " + std::to_string(*naxis) + ", which is not from 0 to 999", at(*position));
             return result;
         }
         result.naxis = static_cast<std::size_t>(*naxis);
@@ -259,7 +284,7 @@ private:
             if (!length) {
                 complete = false;
             } else if (*length < 0) {
-                log_.error(errc::invalid_structure,
+                log_.error(errc::invalid_structure, "4.4.1.1",
                            name_at(*axis) + " is " + std::to_string(*length) + ", which is negative", at(*axis));
                 complete = false;
             } else {
@@ -269,7 +294,7 @@ private:
         for (const std::size_t i : cards_.matching("NAXIS#")) {
             const std::optional<std::uint32_t> n = keyword_index(cards_[i].keyword(), "NAXIS");
             if (n && *n > *result.naxis && cards_[i].has_value_indicator()) {
-                log_.warning(errc::invalid_structure,
+                log_.warning(errc::invalid_structure, "4.4.1.1",
                              "NAXIS is " + std::to_string(*result.naxis) + ", and " + name_at(i) + " is ignored",
                              at(i));
             }
@@ -299,7 +324,7 @@ private:
                                             std::uint64_t fallback, bool optional)
     {
         if (optional && !cards_.contains(keyword)) {
-            log_.warning(errc::missing_keyword,
+            log_.warning(errc::missing_keyword, "7.1.1",
                          "the mandatory keyword " + quote(keyword) + " is missing from the IMAGE extension, and is " +
                              std::to_string(fallback),
                          about(keyword));
@@ -314,7 +339,7 @@ private:
             return std::nullopt;
         }
         if (*count < 0) {
-            log_.error(errc::invalid_structure,
+            log_.error(errc::invalid_structure, mandatory_section(),
                        name_at(*position) + " is " + std::to_string(*count) + ", which is negative", at(*position));
             return std::nullopt;
         }
@@ -327,12 +352,12 @@ private:
     {
         const bool array_like = kind == hdu_kind::image || kind == hdu_kind::table;
         if (array_like && pcount && *pcount != 0) {
-            log_.warning(errc::invalid_structure,
+            log_.warning(errc::invalid_structure, mandatory_section(),
                          "PCOUNT is " + std::to_string(*pcount) + ", where the standard requires 0 of this extension",
                          about("PCOUNT"));
         }
         if ((array_like || kind == hdu_kind::bintable) && gcount && *gcount != 1) {
-            log_.warning(errc::invalid_structure,
+            log_.warning(errc::invalid_structure, mandatory_section(),
                          "GCOUNT is " + std::to_string(*gcount) + ", where the standard requires 1 of this extension",
                          about("GCOUNT"));
         }
@@ -374,7 +399,7 @@ private:
                 return elements;
             }
         }
-        log_.error(errc::invalid_structure, "the size of the data that the header gives does not fit in 64 bits",
+        log_.error(errc::invalid_structure, "", "the size of the data that the header gives does not fit in 64 bits",
                    about("NAXIS"));
         return std::nullopt;
     }
@@ -420,6 +445,38 @@ private:
         }
     }
 
+    // The keywords that the standard confines to the primary header or to the headers of extensions, and those of
+    // extensions and random groups in the header of a primary array, which the reader ignores there: the size of its
+    // data follows from NAXISn alone (standard §4.4.1.1, Eq. 1).
+    void check_places(hdu_kind kind)
+    {
+        for (std::size_t i = 1; i < cards_.size(); ++i) {
+            const std::string_view keyword = cards_[i].keyword();
+            if (index_ == 0) {
+                if (keyword == "XTENSION") {
+                    log_.warning(errc::keyword_order, "4.4.1.2",
+                                 "XTENSION is a keyword of extensions, which must not appear in the primary header",
+                                 at(i));
+                } else if (keyword == "INHERIT") {
+                    log_.warning(errc::reserved_keyword, "Appendix K",
+                                 "INHERIT is a keyword of extensions, which must not appear in the primary header",
+                                 at(i));
+                } else if (kind == hdu_kind::primary &&
+                           (keyword == "PCOUNT" || keyword == "GCOUNT" || keyword == "GROUPS")) {
+                    log_.warning(errc::reserved_keyword, "4.4.1.1",
+                                 name_at(i) +
+                                     " is a keyword of extensions and random groups, which the header of a primary "
+                                     "array does not take, and is ignored",
+                                 at(i));
+                }
+            } else if (keyword == "SIMPLE" || keyword == "EXTEND") {
+                log_.warning(errc::keyword_order, keyword == "SIMPLE" ? "4.4.1.1" : "4.4.2.1",
+                             name_at(i) + " is a keyword of the primary header, which must not appear in an extension",
+                             at(i));
+            }
+        }
+    }
+
     // The type of the values of the reserved keywords, and the values of the keywords of arrays.
     void check_reserved(hdu_kind kind, std::optional<std::int64_t> bitpix)
     {
@@ -460,7 +517,7 @@ private:
                               ? value.get<double>() == 0.0
                               : std::holds_alternative<std::int64_t>(value.data()) && value.get<std::int64_t>() == 0;
         if (zero) {
-            log_.error(errc::reserved_keyword, "BSCALE is 0, which leaves the data of the unit unavailable",
+            log_.error(errc::reserved_keyword, "4.4.2.5", "BSCALE is 0, which leaves the data of the unit unavailable",
                        at(position));
         }
     }
@@ -472,7 +529,7 @@ private:
         }
         // The BITPIX of a compressed image is that of its table; ZBITPIX gives the type of its pixels.
         if (kind != hdu_kind::compressed_image && bitpix && *bitpix < 0) {
-            log_.warning(errc::reserved_keyword,
+            log_.warning(errc::reserved_keyword, "4.4.2.5",
                          "BLANK is ignored, since BITPIX " + std::to_string(*bitpix) + " is of floating-point data",
                          at(position));
         }
@@ -491,7 +548,7 @@ private:
             if (held == value_kind::string) {
                 const std::string text = joined_string(cards_.cards(), position);
                 if (text == "T" || text == "F") {
-                    log_.warning(errc::keyword_type,
+                    log_.warning(errc::keyword_type, reserved_section(cards_[position].keyword()),
                                  name_at(position) + " holds the string " + quote(text) +
                                      ", which is read as the logical",
                                  at(position));
@@ -517,7 +574,7 @@ private:
 
     bool wrong_type(std::size_t position, std::string_view type)
     {
-        log_.warning(errc::reserved_keyword,
+        log_.warning(errc::reserved_keyword, reserved_section(cards_[position].keyword()),
                      "the reserved keyword " + name_at(position) + " does not hold " + std::string(type) +
                          ", as the standard requires",
                      at(position));
@@ -532,7 +589,7 @@ private:
         try {
             const date_time date = parse_date(text);
             if (text.size() == 8 && text[2] == '/' && text[5] == '/') {
-                log_.warning(errc::invalid_date,
+                log_.warning(errc::invalid_date, "4.4.2.1",
                              name_at(position) + " holds the date " + quote(text) +
                                  " in the form DD/MM/YY of files written before 2000, which is read as " +
                                  format_date(date),
@@ -540,7 +597,7 @@ private:
             }
         } catch (const invalid_data_error&) {
             log_.warning(
-                errc::invalid_date,
+                errc::invalid_date, "9.1.1",
                 name_at(position) + " holds " + quote(text) +
                     ", which is not a date of the form YYYY-MM-DD[Thh:mm:ss[.s...]] that the standard requires",
                 at(position));
@@ -551,6 +608,8 @@ private:
     std::uint64_t index_;
     std::uint64_t header_offset_;
     diagnostic_log& log_;
+    // The kind of the unit, once its first keyword and its axes are read.
+    hdu_kind kind_ = hdu_kind::primary;
 };
 
 } // namespace

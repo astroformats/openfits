@@ -111,6 +111,15 @@ int main()
             std::cerr << "the checksums of a unit verify differently\n";
             return 1;
         }
+
+        // The same file compressed whole with gzip, which a reader inflates, and its conformance report.
+        openfits::memory_sink compressed;
+        output.save(compressed, {.gzip_level = 1});
+        const openfits::reader inflated(std::make_unique<openfits::memory_source>(compressed.release()));
+        if (inflated.hdu_count() != 2 || !openfits::verify(inflated).empty()) {
+            std::cerr << "a gzip-compressed file reads differently\n";
+            return 1;
+        }
         return 0;
     } catch (...) {
         // A failing stream must not turn into a crash that hides which check was running.

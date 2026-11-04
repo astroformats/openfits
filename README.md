@@ -9,16 +9,20 @@ that does not depend on any application, so that it can replace CFITSIO in C++ p
 [AstroFormats](https://github.com/astroformats), after [OpenXISF](https://github.com/astroformats/openxisf), and
 shares its design.
 
-**Status: 0.3.0.** An early release, which reads and writes headers, images, tables, checksums and tiled compression:
+**Status: 0.4.0.** An early release, which reads and writes headers, images, tables, checksums and tiled compression:
 the primary array and `IMAGE` extensions with every `BITPIX`, their values converted into any numeric type with the
 scaling, undefined values and unsigned conventions of the standard, read whole or as regions with steps, into memory of
 the library or of the application; binary and ASCII tables, every column type and variable-length arrays among them;
 random groups, read; `DATASUM` and `CHECKSUM`, verified as data are read and written on request; and images and tables
-compressed in tiles with every algorithm of the standard, quantization and dithering among them. gzip-compressed files
-and editing in place come in later releases, and the API may change before 1.0. The ABI holds within a minor version:
-the shared library of each minor version has a soname of its own (`libopenfits.so.0.3` for 0.3.x), and from 0.2 on a
-DLL name of its own on Windows (`openfits-0.3.dll`, `libopenfits-0.3.dll` with MinGW, where 0.1 has `openfits.dll` and
-`libopenfits.dll`), so a program built against 0.2 is rebuilt to use 0.3. The import library keeps its name
+compressed in tiles with every algorithm of the standard, quantization and dithering among them. The writer checks
+every model before it writes, streams the values of images and the rows of tables to the file as they are produced,
+reserves the data of images for later filling, and copies the units of other files byte for byte. Files compressed
+whole with gzip are read and written, and the conformance of a file to the standard is reported in a call, each
+departure with the section of the standard that it departs from. Editing in place comes in a later release, and the
+API may change before 1.0. The ABI holds within a minor version:
+the shared library of each minor version has a soname of its own (`libopenfits.so.0.4` for 0.4.x), and from 0.2 on a
+DLL name of its own on Windows (`openfits-0.4.dll`, `libopenfits-0.4.dll` with MinGW, where 0.1 has `openfits.dll` and
+`libopenfits.dll`), so a program built against 0.3 is rebuilt to use 0.4. The import library keeps its name
 (`openfits.lib`, `libopenfits.dll.a`), so a program links as before. Files are read from, written to and edited through
 sources, sinks and devices of the library or of the application; their header and data units are walked as they are
 asked for, and their headers read as typed values and changed.
@@ -30,18 +34,18 @@ asked for, and their headers read as typed values and changed.
 | Primary array and `IMAGE` extensions, any number of header and data units, every `BITPIX` | Yes | Yes | Planned |
 | Header cards: fixed and free format, strings, logicals, integers, reals, complex and undefined values, commentary, units, display formats, reserved header space | Yes | Yes | Planned |
 | Long strings (`CONTINUE`), `HIERARCH` keywords, `INHERIT` and `LONGSTRN` as keywords | Yes | Yes | Planned |
-| Pixel data: big-endian to native order, `BSCALE`, `BZERO` and `BLANK`, the unsigned conventions, conversion to any numeric type, regions with steps | Yes | Yes: whole images | Planned |
+| Pixel data: big-endian to native order, `BSCALE`, `BZERO` and `BLANK`, the unsigned conventions, conversion to any numeric type, regions with steps | Yes | Yes: whole images, from memory or streamed, and data reserved for regions | Planned |
 | Binary tables (`BINTABLE`): every column type, repeat counts of 0, dimensions, substrings, scaling, the unsigned conventions, nulls, display formats, variable-length arrays with `P` and `Q` descriptors | Yes | Yes | Planned |
 | ASCII tables (`TABLE`): `A`, `I`, `F`, `E` and `D` fields, null strings, blank fields, implied decimal points | Yes | Yes | Planned |
 | Random groups: parameters, by index and by name, and the array of each group | Yes | Not planned (deprecated by the standard) | Not planned |
 | Checksums (`CHECKSUM` and `DATASUM`): verified in reads of whole images, on request and at a strict open, the header part as units are walked; written on request | Yes | Yes | Planned |
 | Tiled image compression: `RICE_1`, `GZIP_1`, `GZIP_2`, `PLIO_1`, `HCOMPRESS_1` and `NOCOMPRESS`, with quantization and dithering, null pixels and a cache of decoded tiles | Yes | Yes | Planned: keywords in place, regions re-encode the unit |
 | Tiled table compression: `RICE_1`, `GZIP_1`, `GZIP_2` and `NOCOMPRESS` columns, variable-length arrays among them | Yes | Yes | Planned: keywords in place, cells through a rewrite |
-| gzip-compressed files (`.fits.gz`) | Planned | Planned | Not applicable |
-| Extensions of unknown type, special records | Yes (raw) | Planned: copied unchanged | Planned: copied unchanged |
+| gzip-compressed files (`.fits.gz`): recognized by their first bytes, every member inflated, into memory or a temporary file | Yes | Yes, on request | Not applicable |
+| Extensions of unknown type, special records | Yes (raw) | Yes: copied unchanged | Planned: copied unchanged |
 | File specifications `file.fits[2]`, `file.fits[SCI,1]`, `file.fits[1][*,1:100]`, parsed when asked for | Yes | Not applicable | Planned: unit selection |
 | WCS and time keywords, read and written as keywords, not evaluated | Yes | Yes | Planned |
-| Verification of a file against the standard, each departure reported with its section | Planned | Not applicable | Not applicable |
+| Verification of a file against the standard, headers and data, each departure reported with its section | Yes | Not applicable | Not applicable |
 
 Editing means changing an existing file in place: keywords, data values, appended rows and units, and a safe rewrite
 for every change of layout. Not planned: evaluating world coordinates (the work of a coordinate library), the filtering
@@ -292,6 +296,49 @@ complete, or refuses to replace one (`if_exists::fail`), and writes into any sin
 writes through a `std::ofstream`, and reads the file back through a `std::ifstream` and a `FILE*`. The examples of
 editing files arrive with that part of the API.
 
+`save()` checks the whole model before it writes a byte, and throws `validation_error`, naming the unit and the keyword,
+for what the standard forbids: a keyword name, a value or a comment that no record holds, a structural keyword in a
+header, a `BLANK` of floating-point data, a `TNULLn` of a column of reals, a compression that the data cannot take. A
+card can carry the text of its value, `card::with_value_text("EXPTIME", "3.0E+02")`, which the save writes as it is,
+under the same options as the cards it formats. Values too large for memory are streamed: the save asks a function of
+the application for them, chunk after chunk of whole rows, as it writes them; a table's rows are streamed alike, and its
+`NAXIS2`, its heap and its checksums completed once they are written. This excerpt of `samples/write_image.cpp` writes
+a frame whose values are computed as the save asks for them:
+
+```cpp
+(void)output.add_image<std::uint16_t>(sky, [](std::uint64_t first, std::span<std::uint16_t> rows) {
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const std::uint64_t x = (first + i) % width;
+        const std::uint64_t y = (first + i) / width;
+        rows[i] = static_cast<std::uint16_t>(1000 + (2 * x) + y);
+    }
+});
+```
+
+`add_reserved_image()` writes an image whose data are zeros, or undefined values, for an editor to fill region by
+region later, the way a stacked frame or a mosaic is written without holding it whole; a file sink makes the file
+longer for its zeros rather than writing them. `add_hdu()` copies a unit of another file as it is, byte for byte, its
+checksums kept, compressed units and extensions of unknown types included, or with its header edited on the way; a
+`without_structural()` of a header, an image or a table read from a file gives the writer its model back in one line.
+This excerpt of `samples/copy_hdu.cpp` appends the units of one file to those of another, with a `HISTORY` card in each
+copied unit and a keyword given as the text of its value:
+
+```cpp
+openfits::header cards = openfits::without_structural(unit.header());
+cards.add_history("Copied from unit " + std::to_string(i) + " of " + arguments[2]);
+if (!keyword.empty()) {
+    // The card takes the place of the first card of the keyword, or comes after the others.
+    openfits::card edited = openfits::card::with_value_text(keyword, value_text);
+    if (const std::optional<std::size_t> position = cards.index_of(keyword)) {
+        (void)cards.erase(keyword);
+        cards.insert(*position, std::move(edited));
+    } else {
+        cards.append(std::move(edited));
+    }
+}
+(void)output.add_hdu(second, i, {.header = cards});
+```
+
 With `checksums` in its options, `save()` gives every unit `DATASUM`, the sum of its data, and `CHECKSUM`, which makes the
 sum of the whole unit negative zero (standard §4.4.2.7), their comment the time of the application, since the library
 reads no clock. A read of a whole image verifies the `DATASUM` of its unit in the same pass as the read, and throws
@@ -336,6 +383,20 @@ camera frame of 6000 x 4000 pixels takes three quarters of the time of `fpack` 1
 and three fifths for 32-bit floating-point values quantized at `q = 4` (an AMD Ryzen 9 9950X under Windows 11, both
 built by MSVC); with oneTBB, the tiles of each image are compressed on every core.
 
+A file compressed whole with gzip, a `.fits.gz` file, a convention outside the standard, is read as the file it holds:
+a reader recognizes it by its first bytes, whatever its name, and inflates it once, every member of it as gzip(1)
+does, each checked against its CRC-32, into memory within `limits::max_inflated_bytes`, or, larger than
+`read_options::inflate.memory_threshold`, into a temporary file in a directory that the application gives there, which
+is removed with the reader; the library takes no directory from the environment. `gzip_source` inflates any source
+alike. A save compresses the file it writes at the level of zlib that `write_options::gzip_level` gives, and
+`gzip_sink` compresses what is written into any sink; a gzip sink cannot go back, so the checksums of values in memory
+are summed before the file is written, and those of streamed values are refused.
+
+```cpp
+output.save("NGC 7000.fits.gz", {.gzip_level = 1});
+const openfits::reader file("NGC 7000.fits.gz", {.inflate = {.temporary_directory = scratch}});
+```
+
 `file.table(index)` describes a table, ASCII or binary: its rows and columns, the format, dimensions, scaling, null and
 unit of each, and the heap of variable-length arrays. A column is read over a range of rows as any numeric type, scaled,
 its undefined values given as the policy of the read says, or as strings through its display format; several columns
@@ -375,6 +436,31 @@ output.save(path);
 `file.groups(0)` describes random groups (standard §6), whose parameters `read_parameter<T>()` reads by index, or by
 name, the parameters of one name summed as the standard says, and whose arrays `read_group<T>()` reads as an image.
 
+`openfits::verify()` gives the conformance report of a file, which no other FITS library gives in a call: each
+departure from the standard that the library finds, with its severity, its unit, its keyword or column, and the
+section of the standard that it departs from. It holds what a strict reading finds in the headers, every departure
+that the reader reads through as intended among them, and then checks what reads do not: the fill of every data unit,
+every field of every ASCII table, the logicals and characters of binary tables, every descriptor of variable-length
+arrays against the heap, every checksum, and units of one name and version. A problem that repeats in a column is
+listed ten times and counted after. This excerpt of `samples/verify.cpp` prints the report of a file, one line for
+each finding:
+
+```cpp
+const std::vector<openfits::diagnostic> findings = openfits::verify(path);
+for (const openfits::diagnostic& finding : findings) {
+    std::cout << path << ": " << severity_name(finding.severity) << ": " << place(finding.context) << ": "
+              << finding.message;
+    if (!finding.section.empty()) {
+        std::cout << " (standard " << finding.section << ')';
+    }
+    std::cout << '\n';
+}
+```
+
+The diagnostics of a reader carry the same sections. Their severities say what reading a file takes: an `error` leaves
+part of the file unavailable, a `warning` is a departure read as intended, and an `info` a departure that changes
+nothing, a form that the standard deprecates, or a convention outside it.
+
 ## Thread safety, errors and text
 
 These are the design rules. They take effect as the API arrives.
@@ -392,7 +478,8 @@ These are the design rules. They take effect as the API arrives.
 - **Text.** The API carries text as UTF-8 in `std::string` and `std::string_view`, paths included, on every platform;
   invalid UTF-8 in a path is refused. A path is always the name of a file, so that `M31 [Ha].fits` opens as itself.
   Header cards hold printable ASCII, as the standard requires: other bytes are reported when read and refused when
-  written.
+  written, unless the save replaces them with question marks or keeps them (`write_options::non_ascii`), for
+  applications that copy cards as they read them.
 
 ## Security
 

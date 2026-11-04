@@ -17,6 +17,7 @@
 #include <openfits/stream_io.h>
 #include <openfits/table.h>
 #include <openfits/types.h>
+#include <openfits/verify.h>
 #include <openfits/version.h>
 #include <openfits/writer.h>
 

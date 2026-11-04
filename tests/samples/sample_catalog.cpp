@@ -3,8 +3,15 @@
 
 #include "samples/sample_catalog.h"
 
+#include <openfits/io.h>
+
+#include "support/files.h"
+#include "support/temp_directory.h"
+
 #include <algorithm>
+#include <cstddef>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <utility>
 
@@ -114,7 +121,30 @@ std::vector<sample> make_samples()
                                    image_content::pattern, "SCI"));
     a13.units.push_back(
         image_unit(hdu_kind::image, std::uint64_t{11} * 7, numeric_type::uint8, {11, 7}, image_content::mask, "MASK"));
+    // The samples of gzip-compressed files, a convention outside the standard, hold A13.
+    const std::vector<sample_unit> mef_units = a13.units;
     add(std::move(a13));
+
+    const std::string_view gzip_producer = "Python 3.14.4, its gzip module at level 9 (zlib)";
+    const std::string_view gzip_script = "tests/data/scripts/make_gzip.py";
+    sample d6;
+    d6.id = "D6";
+    d6.file = "gzip/d6-gzip.fits.gz";
+    d6.content = "A13 compressed whole with gzip, one member without a name and with a time of 0";
+    d6.producer = gzip_producer;
+    d6.procedure = gzip_script;
+    d6.units = mef_units;
+    add(std::move(d6));
+
+    sample d6b;
+    d6b.id = "D6b";
+    d6b.file = "gzip/d6b-gzip-members.fits.gz";
+    d6b.content =
+        "A13 compressed with gzip as two members, its primary HDU in the first and its extensions in the second";
+    d6b.producer = gzip_producer;
+    d6b.procedure = gzip_script;
+    d6b.units = mef_units;
+    add(std::move(d6b));
 
     sample a14;
     a14.id = "A14";
@@ -141,6 +171,8 @@ std::vector<sample> make_samples()
     d1.procedure = astropy_script;
     d1.set_by_hand = "the records after BZERO, given to astropy as card images, which it writes as they are";
     d1.units.push_back(pattern_unit(2, numeric_type::uint16));
+    // INHERIT, a keyword of extensions, which standard Appendix K keeps out of the primary header.
+    d1.departures = {errc::reserved_keyword};
     add(std::move(d1));
 
     sample d2;
@@ -169,6 +201,8 @@ std::vector<sample> make_samples()
                      "12.345 with the implied one; the I6 field of row 3 the TNULLn string";
     d3.units.push_back(unit_of(hdu_kind::primary, 0));
     d3.units.push_back(unit_of(hdu_kind::table, std::uint64_t{58} * 4, "ASCII"));
+    // The implied decimal point, which standard §7.2.5 deprecates.
+    d3.report_departures = {errc::invalid_field};
     add(std::move(d3));
 
     sample d4;
@@ -272,6 +306,8 @@ std::vector<sample> make_samples()
     fpack_image("B9", "fpack/b9-f32-gzip-lossless.fits",
                 "A9 compressed losslessly with GZIP_1, with CFITSIO's ZQUANTIZ = 'NONE'",
                 "fpack -C -g -q 0, tests/data/scripts/make_fpack.py", compressed(3976, numeric_type::float32));
+    // ZQUANTIZ = 'NONE', a convention outside the standard, which verify() reports.
+    samples.back().report_departures = {errc::invalid_compression};
     sample_unit b10 = compressed(1672, numeric_type::float32);
     b10.tolerance = 0.5e-4;
     for (std::uint64_t y = 0; y < height; ++y) {
@@ -446,6 +482,19 @@ const sample& sample_by_id(std::string_view id)
 std::string sample_path(const sample& unit)
 {
     return std::string(OPENFITS_TEST_DATA_DIR) + "/" + std::string(unit.file);
+}
+
+std::string sample_content(const sample& unit)
+{
+    std::string bytes = read_file(path_of(sample_path(unit)));
+    if (bytes.size() < 2 || bytes[0] != static_cast<char>(0x1F) || bytes[1] != static_cast<char>(0x8B)) {
+        return bytes;
+    }
+    const memory_source compressed(std::as_bytes(std::span(bytes)));
+    const gzip_source content(compressed);
+    std::string inflated(content.bytes().size(), char{});
+    std::ranges::transform(content.bytes(), inflated.begin(), [](std::byte value) { return static_cast<char>(value); });
+    return inflated;
 }
 
 void PrintTo(const sample& unit, std::ostream* output)

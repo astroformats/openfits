@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(openfits
-    VERSION 0.3.0
+    VERSION 0.4.0
     DESCRIPTION "C++20 library for reading and writing FITS files"
     HOMEPAGE_URL "https://github.com/astroformats/openfits"
     LANGUAGES CXX)

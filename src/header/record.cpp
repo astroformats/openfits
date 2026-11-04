@@ -22,9 +22,14 @@ constexpr std::string_view hierarch_record_prefix = "HIERARCH ";
 constexpr std::size_t fixed_value_end = 30;
 constexpr std::string_view comment_separator = " / ";
 
-void depart(std::vector<diagnostic>& departures, severity level, errc code, std::string message)
+void depart(std::vector<diagnostic>& departures, severity level, errc code, std::string_view section,
+            std::string message)
 {
-    departures.push_back({.severity = level, .code = code, .message = std::move(message), .context = {}});
+    departures.push_back({.severity = level,
+                          .code = code,
+                          .section = std::string(section),
+                          .message = std::move(message),
+                          .context = {}});
 }
 
 // What makes a keyword name read from a record other than a name of standard §4.1.2.1, or nothing.
@@ -51,7 +56,7 @@ std::optional<std::string_view> name_problem(std::string_view name, bool left_ju
 void check_name(std::string_view name, bool left_justified, std::vector<diagnostic>& departures)
 {
     if (const std::optional<std::string_view> problem = name_problem(name, left_justified)) {
-        depart(departures, severity::warning, errc::invalid_keyword,
+        depart(departures, severity::warning, errc::invalid_keyword, "4.1.2.1",
                "the keyword name " + quote(name) + ' ' + std::string(*problem));
     }
 }
@@ -116,14 +121,35 @@ card card_access::make(std::string keyword, card_value value, std::string commen
     result.value_end_ = static_cast<std::uint8_t>(value_end);
     result.value_indicator_ = value_indicator;
     result.fixed_format_ = fixed_format;
+    result.record_ = true;
     return result;
+}
+
+std::string ascii_text(std::string_view text, const record_options& options, const error_context& where,
+                       std::string_view what)
+{
+    if (is_printable(text) || options.non_ascii == byte_policy::keep) {
+        return std::string(text);
+    }
+    if (options.non_ascii == byte_policy::refuse) {
+        throw validation_error(errc::invalid_character,
+                               std::string(what) + ' ' + quote(text) + " holds a character outside printable ASCII",
+                               where);
+    }
+    std::string replaced(text);
+    for (char& c : replaced) {
+        if (!is_printable(c)) {
+            c = '?';
+        }
+    }
+    return replaced;
 }
 
 card parse_record(std::string_view record, std::vector<diagnostic>& departures)
 {
     std::vector<diagnostic> found;
     if (!is_printable(record)) {
-        depart(found, severity::warning, errc::invalid_character,
+        depart(found, severity::warning, errc::invalid_character, "4.1.2.3",
                "the record holds bytes outside printable ASCII, which are kept as they are");
     }
 
@@ -135,7 +161,7 @@ card parse_record(std::string_view record, std::vector<diagnostic>& departures)
                 trim_spaces(record.substr(hierarch_record_prefix.size(), equals - hierarch_record_prefix.size()));
             if (!name.empty()) {
                 if (std::ranges::any_of(name, is_lower)) {
-                    depart(found, severity::warning, errc::invalid_keyword,
+                    depart(found, severity::warning, errc::invalid_keyword, "4.1.2.1",
                            "the keyword name " + quote(name) + " has lowercase letters");
                 }
                 value_field field = read_value_field(record.substr(equals + 1), false, found);
@@ -201,23 +227,25 @@ card parse_record(std::string_view record, std::vector<diagnostic>& departures)
         return commentary_card(std::move(keyword), record, found, departures);
     }
     if (misplaced) {
-        depart(found, severity::warning, errc::invalid_value_indicator,
+        depart(found, severity::warning, errc::invalid_value_indicator, "4.1.2.2",
                "the value indicator is not '= ' in bytes 9 and 10");
     }
     value_field field = read_value_field(record.substr(field_begin), field_begin == 10, found);
     return finish(std::move(keyword), std::move(field), field_begin, record, true, found, departures);
 }
 
-std::string write_value_record(std::string_view keyword, const card_value& value, std::string_view comment,
-                               const record_options& options)
+namespace {
+
+// The name of the record of a keyword with a value, checked: one that can have a value, and of the standard or, when
+// options allow the HIERARCH convention, one that its record can hold.
+std::string value_name(std::string_view keyword, const record_options& options)
 {
-    const std::string name = canonical_hierarch_name(keyword);
+    std::string name = canonical_hierarch_name(keyword);
     const error_context where{.hdu = options.hdu, .keyword = name};
     if (is_commentary_keyword(name) || name == "CONTINUE" || name == "END") {
         throw validation_error(errc::invalid_keyword, "the keyword " + quote(name) + " cannot have a value", where);
     }
-    const bool standard = is_standard_keyword(name);
-    if (!standard) {
+    if (!is_standard_keyword(name)) {
         if (!options.hierarch) {
             throw validation_error(errc::invalid_keyword,
                                    "the keyword name " + quote(name) +
@@ -230,24 +258,20 @@ std::string write_value_record(std::string_view keyword, const card_value& value
                 "the keyword name " + quote(name) + " cannot be written with the HIERARCH convention", where);
         }
     }
-    if (!is_printable(comment)) {
-        throw validation_error(errc::invalid_character,
-                               "the comment " + quote(comment) + " holds a character outside printable ASCII", where);
-    }
-    std::string text;
-    try {
-        text = format_value(value);
-    } catch (const validation_error& failure) {
-        throw validation_error(failure.code(), failure.what(), where);
-    }
+    return name;
+}
 
+// The record of the keyword name, checked by value_name(), with the text of its value, of kind, and comment.
+std::string value_record(const std::string& name, std::string_view text, value_kind kind, std::string_view comment,
+                         const record_options& options, const error_context& where)
+{
+    const bool standard = is_standard_keyword(name);
     std::string record;
     std::size_t comment_start = 0;
     if (standard) {
         record = name;
         record.resize(8, ' ');
         record += "= ";
-        const value_kind kind = value.kind();
         const bool right_justified = kind != value_kind::string && kind != value_kind::undefined &&
                                      text.size() <= fixed_value_end - record.size();
         if (right_justified) {
@@ -260,11 +284,12 @@ std::string write_value_record(std::string_view keyword, const card_value& value
             comment_start = record.size();
         }
     } else {
-        record = std::string(hierarch_record_prefix) + name + " = " + text;
-        if (record.size() > record_length) {
+        record = std::string(hierarch_record_prefix) + name + " = ";
+        if (record.size() + text.size() > record_length) {
             // A character less, as the convention allows.
-            record = std::string(hierarch_record_prefix) + name + "= " + text;
+            record.erase(record.size() - 3, 1);
         }
+        record += text;
         comment_start = record.size();
     }
     if (record.size() > record_length) {
@@ -276,6 +301,43 @@ std::string write_value_record(std::string_view keyword, const card_value& value
     return record;
 }
 
+} // namespace
+
+std::string write_value_record(std::string_view keyword, const card_value& value, std::string_view comment,
+                               const record_options& options)
+{
+    const std::string name = value_name(keyword, options);
+    const error_context where{.hdu = options.hdu, .keyword = name};
+    const std::string written_comment = ascii_text(comment, options, where, "the comment");
+    std::string text;
+    try {
+        if (value.kind() == value_kind::string) {
+            text = format_string(ascii_text(value.get<std::string>(), options, where, "the string"),
+                                 options.non_ascii == byte_policy::keep);
+        } else {
+            text = format_value(value);
+        }
+    } catch (const validation_error& failure) {
+        throw validation_error(failure.code(), failure.what(), where);
+    }
+    return value_record(name, text, value.kind(), written_comment, options, where);
+}
+
+std::string write_value_text_record(std::string_view keyword, std::string_view text, value_kind kind,
+                                    std::string_view comment, const record_options& options)
+{
+    const std::string name = value_name(keyword, options);
+    const error_context where{.hdu = options.hdu, .keyword = name};
+    const std::string written_comment = ascii_text(comment, options, where, "the comment");
+    const std::string written_text = ascii_text(text, options, where, "the value text");
+    try {
+        check_value_text(written_text, options.non_ascii == byte_policy::keep);
+    } catch (const validation_error& failure) {
+        throw validation_error(failure.code(), failure.what(), where);
+    }
+    return value_record(name, written_text, kind, written_comment, options, where);
+}
+
 std::string write_commentary_record(std::string_view keyword, std::string_view text, const record_options& options)
 {
     const std::string name = canonical_hierarch_name(keyword);
@@ -284,10 +346,8 @@ std::string write_commentary_record(std::string_view keyword, std::string_view t
         throw validation_error(errc::invalid_keyword,
                                "the keyword " + quote(name) + " cannot be written as a commentary card", where);
     }
-    if (!is_printable(text)) {
-        throw validation_error(errc::invalid_character,
-                               "the text " + quote(text) + " holds a character outside printable ASCII", where);
-    }
+    const std::string written = ascii_text(text, options, where, "the text");
+    text = written;
     std::string record = name;
     record.resize(8, ' ');
     if (text.size() > record_length - record.size()) {
@@ -317,9 +377,14 @@ std::string write_commentary_record(std::string_view keyword, std::string_view t
 std::string write_record(const card& value, const record_options& options)
 {
     if (!value.text().empty()) {
-        return std::string(value.text());
+        return ascii_text(value.text(), options, {.hdu = options.hdu, .keyword = std::string(value.keyword())},
+                          "the record");
     }
     if (value.has_value_indicator()) {
+        if (!value.value_text().empty()) {
+            return write_value_text_record(value.keyword(), value.value_text(), value.value().kind(), value.comment(),
+                                           options);
+        }
         return write_value_record(value.keyword(), value.value(), value.comment(), options);
     }
     return write_commentary_record(value.keyword(), value.comment(), options);

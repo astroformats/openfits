@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 
 // The numbers of the fields of ASCII tables, read as Fortran reads its input formats (standard §7.2.5).
@@ -37,6 +38,26 @@ struct field_number
 /// read_integer_field() of the fields that most tables hold, without allocating: a blank field, or an optional sign
 /// and up to 18 digits between spaces. Nothing for any other field, which read_integer_field() reads.
 [[nodiscard]] std::optional<std::int64_t> read_plain_integer_field(std::string_view field) noexcept;
+
+/// True when a field of an ASCII table is the TNULLn of its column, null, which is filled with spaces to the width of
+/// the field (standard §7.2.2).
+[[nodiscard]] bool is_null_field(std::string_view field, const std::optional<std::string>& null);
+
+/// The forms of numbers that read_integer_field() and read_real_field() read and standard §7.2.5 does not allow, from
+/// the least serious to the most.
+enum class field_departure : std::uint8_t
+{
+    none,
+    implied_decimal_point, ///< A real without a decimal point in a field of decimals, which the standard deprecates.
+    lowercase_exponent,    ///< e or d as the letter of an exponent, which the standard does not list.
+    embedded_spaces,       ///< Spaces within the number, which the standard forbids.
+};
+
+/// The most serious departure of the text of an Iw field that read_integer_field() reads.
+[[nodiscard]] field_departure integer_field_departure(std::string_view field) noexcept;
+
+/// The most serious departure of the text of an Fw.d, Ew.d or Dw.d field of decimals d that read_real_field() reads.
+[[nodiscard]] field_departure real_field_departure(std::string_view field, std::uint32_t decimals) noexcept;
 
 /// read_real_field() of the fields that most tables hold, without allocating: a blank field, or between spaces an
 /// optional sign, digits with a decimal point, or without one when decimals is 0, and an optional exponent of a letter

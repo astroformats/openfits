@@ -6,6 +6,7 @@
 #include <openfits/card.h>
 #include <openfits/error.h>
 
+#include "header/long_string.h"
 #include "support/throws.h"
 
 #include <gtest/gtest.h>
@@ -465,6 +466,96 @@ TEST(record_writer, a_card_read_from_a_record_is_written_as_that_record)
     }
     EXPECT_EQ(write_record(card("EXPTIME", 300.0, "[s]"), {}), write_value_record("EXPTIME", 300.0, "[s]", {}));
     EXPECT_EQ(write_record(card::commentary("HISTORY", "x"), {}), write_commentary_record("HISTORY", "x", {}));
+}
+
+std::string padded(std::string text)
+{
+    text.resize(80, ' ');
+    return text;
+}
+
+// A card of a value text has its value written as that text, in the record that a card of that value would have.
+TEST(record_writer, a_value_text_is_written_as_it_is)
+{
+    EXPECT_EQ(write_record(card::with_value_text("exposure", "1.50E+03", "[s] time"), {}),
+              padded("EXPOSURE=             1.50E+03 / [s] time"));
+    EXPECT_EQ(write_record(card::with_value_text("OBJECT", "'M 31'"), {}), padded("OBJECT  = 'M 31'"));
+    EXPECT_EQ(write_record(card::with_value_text("FLAG", " T "), {}), padded("FLAG    =                    T"));
+    EXPECT_EQ(write_record(card::with_value_text("NOTHING", ""), {}), padded("NOTHING ="));
+    EXPECT_EQ(write_record(card::with_value_text("PAIR", "(1, -2)", "a pair"), {}),
+              padded("PAIR    =              (1, -2) / a pair"));
+    // A text longer than the fixed format starts in byte 11; the comment then follows it.
+    const std::string digits = "1.234567890123456789012E+05";
+    EXPECT_EQ(write_record(card::with_value_text("LONG", digits, "c"), {}), padded("LONG    = " + digits + " / c"));
+}
+
+TEST(record_writer, a_value_text_takes_the_forms_that_the_options_allow)
+{
+    const card hierarch = card::with_value_text("ESO DET DIT", "1.5", "[s] exposure");
+    EXPECT_TRUE(refused(errc::invalid_keyword, [&] { (void)write_record(hierarch, {}); }));
+    EXPECT_EQ(write_record(hierarch, {.hierarch = true}), padded("HIERARCH ESO DET DIT = 1.5 / [s] exposure"));
+
+    const card commented = card::with_value_text("A", "1", std::string(60, 'c'));
+    EXPECT_TRUE(refused(errc::comment_too_long, [&] { (void)write_record(commented, {}); }));
+    EXPECT_EQ(write_record(commented, {.truncate_comment = true}),
+              padded("A       =                    1 / " + std::string(47, 'c')));
+
+    // A string that does not fit is continued as the string it holds; any other value is refused.
+    const card text = card::with_value_text("NOTE", "'" + std::string(80, 'n') + "'");
+    const std::vector<std::string> records = openfits::detail::card_records(text, {});
+    ASSERT_EQ(records.size(), 2U);
+    EXPECT_EQ(records[0].substr(0, 12), "NOTE    = 'n");
+    EXPECT_EQ(records[1].substr(0, 11), "CONTINUE  '");
+    EXPECT_TRUE(refused(errc::value_too_long,
+                        [] { (void)write_record(card::with_value_text("N", "1." + std::string(69, '5')), {}); }));
+}
+
+// Standard §4.2: a value text is written only when it is one value of the standard, without the departures that a
+// reader tolerates.
+TEST(record_writer, a_value_text_of_no_form_of_the_standard_is_refused)
+{
+    const std::vector<std::pair<std::string, errc>> texts{
+        {"1,5", errc::invalid_value},      {"1.5e3", errc::invalid_real},      {"t", errc::invalid_logical},
+        {"'open", errc::invalid_string},   {"1 / 2", errc::invalid_value},     {"1 2", errc::invalid_comment},
+        {"(1, x)", errc::invalid_complex}, {"1E999", errc::value_out_of_range}};
+    for (const auto& entry : texts) {
+        const std::string& text = entry.first;
+        EXPECT_TRUE(refused(entry.second, [&text] { (void)write_record(card::with_value_text("V", text), {}); }))
+            << text;
+    }
+}
+
+// Standard §4.1.2.3: printable ASCII alone, unless the options replace the other bytes or keep them.
+TEST(record_writer, bytes_outside_printable_ascii_are_refused_replaced_or_kept)
+{
+    using openfits::detail::byte_policy;
+    const std::string latin = "caf\xE9";
+    const card value("OBJECT", latin,
+                     "100 \xB0"
+                     "C");
+    const card commentary = card::commentary("HISTORY", latin);
+    const card text = card::with_value_text("NAME", "'" + latin + "'");
+    std::string raw = "COMMENT \xE9t\xE9";
+    raw.resize(80, ' ');
+    const card read = card::parse(raw);
+    for (const card& entry : {value, commentary, text, read}) {
+        EXPECT_TRUE(refused(errc::invalid_character, [&] { (void)write_record(entry, {}); })) << entry.keyword();
+    }
+    EXPECT_EQ(write_record(value, {.non_ascii = byte_policy::replace}),
+              padded("OBJECT  = 'caf?    '           / 100 ?C"));
+    EXPECT_EQ(write_record(commentary, {.non_ascii = byte_policy::replace}), padded("HISTORY caf?"));
+    EXPECT_EQ(write_record(text, {.non_ascii = byte_policy::replace}), padded("NAME    = 'caf?'"));
+    EXPECT_EQ(write_record(read, {.non_ascii = byte_policy::replace}), padded("COMMENT ?t?"));
+
+    EXPECT_EQ(write_record(value, {.non_ascii = byte_policy::keep}),
+              padded("OBJECT  = 'caf\xE9    '           / 100 \xB0"
+                     "C"));
+    EXPECT_EQ(write_record(text, {.non_ascii = byte_policy::keep}), padded("NAME    = 'caf\xE9'"));
+    EXPECT_EQ(write_record(read, {.non_ascii = byte_policy::keep}), raw);
+    // A keyword name never takes them, whatever the options.
+    EXPECT_TRUE(refused(errc::invalid_keyword, [] {
+        (void)write_value_record("CAF\xC9", 1, {}, {.hierarch = true, .non_ascii = byte_policy::keep});
+    }));
 }
 
 } // namespace

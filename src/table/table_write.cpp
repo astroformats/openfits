@@ -5,6 +5,7 @@
 
 #include <openfits/error.h>
 
+#include "checksum/checksum.h"
 #include "core/ascii.h"
 #include "core/endian.h"
 #include "data/conversion.h"
@@ -50,10 +51,18 @@ std::string column_name(std::uint64_t number)
     return "column " + std::to_string(number);
 }
 
+// The size of a table beyond 2^64 bytes, which no data unit can hold (standard §7.2.1, §7.3.1).
+[[noreturn]] void too_large(std::uint64_t hdu)
+{
+    throw validation_error(errc::invalid_structure,
+                           "the size of the table of unit " + std::to_string(hdu) + " does not fit in 64 bits",
+                           {.hdu = hdu, .keyword = "NAXIS2"});
+}
+
 std::uint64_t checked_product(std::uint64_t a, std::uint64_t b, std::uint64_t hdu)
 {
     if (a != 0 && b > max_uint64 / a) {
-        throw usage_error(errc::arithmetic_overflow, "the size of a table does not fit in 64 bits", {.hdu = hdu});
+        too_large(hdu);
     }
     return a * b;
 }
@@ -61,7 +70,7 @@ std::uint64_t checked_product(std::uint64_t a, std::uint64_t b, std::uint64_t hd
 std::uint64_t checked_sum(std::uint64_t a, std::uint64_t b, std::uint64_t hdu)
 {
     if (b > max_uint64 - a) {
-        throw usage_error(errc::arithmetic_overflow, "the size of a table does not fit in 64 bits", {.hdu = hdu});
+        too_large(hdu);
     }
     return a + b;
 }
@@ -405,6 +414,40 @@ void check_strings(const column_model& model, std::uint64_t hdu, std::uint64_t n
     }
 }
 
+// The values of a column for each row of fixed fields: the strings of a field of characters, the elements of a field
+// of another type, 1 for a field of an ASCII table.
+std::uint64_t values_per_row(const column_model& model, std::uint64_t hdu)
+{
+    const column_format& format = model.format;
+    if (format.field) {
+        return 1;
+    }
+    if (model.values.kind == values_kind::strings) {
+        if (format.substring_width) {
+            return format.repeat / *format.substring_width;
+        }
+        return model.info.dimensions.empty() ? 1 : product_of(model.info.dimensions, 1, hdu);
+    }
+    return format.repeat;
+}
+
+// The rows that the values of a column hold, as count_values() counts them; nothing for fixed fields without values.
+std::optional<std::uint64_t> rows_of(const column_model& model, std::uint64_t hdu)
+{
+    const values_view& values = model.values;
+    if (values.variable) {
+        if (values.kind == values_kind::strings) {
+            return values.count;
+        }
+        return values.offsets.empty() ? 0 : values.offsets.size() - 1;
+    }
+    const std::uint64_t per_row = values_per_row(model, hdu);
+    if (per_row == 0) {
+        return std::nullopt;
+    }
+    return values.count / per_row;
+}
+
 // The elements of the fields of a column, or of its arrays, and their number against the rows.
 void count_values(column_model& model, std::uint64_t rows, std::uint64_t hdu, std::uint64_t number)
 {
@@ -507,8 +550,10 @@ values_view column_values_access::view(const column_values& values) noexcept
     return view;
 }
 
-table_model resolve_table(table_info info, std::span<const column_values> values, const table_write_options& options,
-                          std::uint64_t hdu)
+namespace {
+
+// The checks of the model of a table that do not depend on its values.
+void check_table(const table_info& info, const table_write_options& options, std::uint64_t hdu)
 {
     if (info.kind != hdu_kind::table && info.kind != hdu_kind::bintable) {
         throw usage_error(errc::invalid_argument,
@@ -521,23 +566,133 @@ table_model resolve_table(table_info info, std::span<const column_values> values
                               " are physical or stored: scaling_policy::override is for reads and images",
                           {.hdu = hdu});
     }
-    if (values.size() != info.columns.size()) {
-        throw usage_error(errc::invalid_argument,
-                          "the table of unit " + std::to_string(hdu) + " has " + std::to_string(info.columns.size()) +
-                              " columns and values for " + std::to_string(values.size()),
-                          {.hdu = hdu});
-    }
     if (info.columns.size() > 999) {
         throw validation_error(errc::invalid_structure,
                                "a table has at most 999 columns (standard §7.2.1, §7.3.1), and that of unit " +
                                    std::to_string(hdu) + " has " + std::to_string(info.columns.size()),
                                {.hdu = hdu, .keyword = "TFIELDS"});
     }
+}
+
+// The checks of the format of a column, which it has: its kind of table, its descriptor, and its keywords.
+void check_format(const column_model& model, bool ascii, std::uint64_t hdu, std::uint64_t number)
+{
+    const column_format& format = model.format;
+    if (ascii != format.field.has_value()) {
+        forbid(errc::invalid_column_format,
+               "the format of " + column_name(number) + " is one of the other kind of table", hdu, number,
+               "TFORM" + std::to_string(number));
+    }
+    if (format.storage != column_storage::fixed && format.repeat != 1) {
+        forbid(errc::invalid_column_format,
+               "a column of variable-length arrays has one descriptor in each row, and " + column_name(number) +
+                   " has " + std::to_string(format.repeat),
+               hdu, number, "TFORM" + std::to_string(number));
+    }
+    check_keywords(model, ascii, hdu, number);
+}
+
+// The checks of the values of a column against its format, for rows rows, which count them.
+void check_values(column_model& model, std::uint64_t rows, std::uint64_t hdu, std::uint64_t number)
+{
+    const column_format& format = model.format;
+    if (!holds(format, model.values.kind)) {
+        refuse("the values of " + column_name(number) + " are not of a kind that its format " + format.to_string() +
+                   " holds",
+               hdu, number);
+    }
+    if (model.values.variable != (format.storage != column_storage::fixed)) {
+        refuse(column_name(number) + (model.values.variable
+                                          ? " holds variable-length arrays, and its format fixed fields"
+                                          : " holds fixed fields, and its format variable-length arrays"),
+               hdu, number);
+    }
+    count_values(model, rows, hdu, number);
+    if (model.values.kind == values_kind::strings) {
+        check_strings(model, hdu, number);
+    }
+}
+
+// The heap of the arrays of each column of variable-length arrays in the order of the rows, compact, from the offset
+// base of a heap that holds the arrays of other rows before them; its size. A format derived from the values takes Q
+// descriptors when P ones cannot hold a count or an offset; a P of the caller's is refused then.
+std::uint64_t lay_out_heap(table_model& table, std::uint64_t base, std::uint64_t hdu)
+{
+    std::uint64_t heap = 0;
+    for (std::size_t i = 0; i < table.columns.size(); ++i) {
+        column_model& model = table.columns[i];
+        column_format& format = model.format;
+        if (format.storage == column_storage::fixed) {
+            continue;
+        }
+        std::uint64_t most = 0;
+        bool wide = false;
+        model.heap_offsets.clear();
+        for (const std::uint64_t count : model.counts) {
+            // An empty array has no offset, which "should be set to zero" (standard §7.3.5).
+            const std::uint64_t at = checked_sum(base, heap, hdu);
+            model.heap_offsets.push_back(count == 0 ? 0 : at);
+            wide = wide || count > max_p || (count > 0 && at > max_p);
+            heap = checked_sum(heap, array_bytes(format.type, count, hdu), hdu);
+            most = std::max(most, count);
+        }
+        if (wide && format.storage == column_storage::variable_p) {
+            if (!model.derived) {
+                forbid(errc::invalid_column_format,
+                       "the P descriptors of " + column_name(i + 1) +
+                           " cannot hold the counts or offsets of its arrays in the heap, which need Q ones",
+                       hdu, i + 1, "TFORM" + std::to_string(i + 1));
+            }
+            format.storage = column_storage::variable_q;
+        }
+        format.max_elements = std::max(format.max_elements.value_or(0), most);
+    }
+    return heap;
+}
+
+// The offsets of the fields in a row, which follow from the descriptors chosen, and the bytes of a row: one space
+// between the fields of an ASCII table, as is common (standard §7.2.4).
+void lay_out_fields(table_model& table, bool ascii, std::uint64_t hdu)
+{
+    std::uint64_t offset = 0;
+    for (std::size_t i = 0; i < table.columns.size(); ++i) {
+        column_model& model = table.columns[i];
+        model.info.offset = offset;
+        offset = checked_sum(offset, model.format.field_size(), hdu);
+        if (ascii && i + 1 < table.columns.size()) {
+            offset = checked_sum(offset, 1, hdu);
+        }
+        model.info.format = model.format;
+    }
+    table.info.row_size = offset;
+}
+
+// The sizes of the data of a table of rows and a heap of heap bytes, checked to fit in 64 bits with their fill.
+void set_sizes(table_model& table, std::uint64_t rows, std::uint64_t heap, std::uint64_t hdu)
+{
+    table.heap_size = heap;
+    table.info.rows = rows;
+    table.info.heap_offset = checked_product(table.info.row_size, rows, hdu);
+    table.info.heap_size = heap;
+    (void)checked_sum(table.info.heap_offset, checked_sum(heap, block_size, hdu), hdu);
+}
+
+} // namespace
+
+table_model resolve_table(table_info info, std::span<const column_values> values, const table_write_options& options,
+                          std::uint64_t hdu)
+{
+    check_table(info, options, hdu);
+    if (values.size() != info.columns.size()) {
+        throw usage_error(errc::invalid_argument,
+                          "the table of unit " + std::to_string(hdu) + " has " + std::to_string(info.columns.size()) +
+                              " columns and values for " + std::to_string(values.size()),
+                          {.hdu = hdu});
+    }
     const bool ascii = info.kind == hdu_kind::table;
     table_model table;
     table.options = options;
     table.columns.reserve(info.columns.size());
-    std::uint64_t offset = 0;
     for (std::size_t i = 0; i < info.columns.size(); ++i) {
         const std::uint64_t number = i + 1;
         column_model model;
@@ -553,92 +708,92 @@ table_model resolve_table(table_info info, std::span<const column_values> values
             }
             model.info.format = derived_format(model, ascii, hdu, number);
             model.derived = true;
-        } else if (ascii != model.info.format->field.has_value()) {
-            forbid(errc::invalid_column_format,
-                   "the format of " + column_name(number) + " is one of the other kind of table", hdu, number,
-                   "TFORM" + std::to_string(number));
         }
         model.format = *model.info.format;
-        column_format& format = model.format;
-        if (!holds(format, model.values.kind)) {
-            refuse("the values of " + column_name(number) + " are not of a kind that its format " + format.to_string() +
-                       " holds",
-                   hdu, number);
-        }
-        if (model.values.variable != (format.storage != column_storage::fixed)) {
-            refuse(column_name(number) + (model.values.variable
-                                              ? " holds variable-length arrays, and its format fixed fields"
-                                              : " holds fixed fields, and its format variable-length arrays"),
-                   hdu, number);
-        }
-        if (format.storage != column_storage::fixed && format.repeat != 1) {
-            forbid(errc::invalid_column_format,
-                   "a column of variable-length arrays has one descriptor in each row, and " + column_name(number) +
-                       " has " + std::to_string(format.repeat),
-                   hdu, number, "TFORM" + std::to_string(number));
-        }
-        check_keywords(model, ascii, hdu, number);
-        count_values(model, info.rows, hdu, number);
-        if (model.values.kind == values_kind::strings) {
-            check_strings(model, hdu, number);
-        }
-        if (ascii) {
-            // One space between the fields, as is common (standard §7.2.4).
-            model.info.offset = offset;
-            offset =
-                checked_sum(checked_sum(offset, format.field_size(), hdu), i + 1 < info.columns.size() ? 1 : 0, hdu);
-        }
+        check_format(model, ascii, hdu, number);
+        check_values(model, info.rows, hdu, number);
         table.columns.push_back(std::move(model));
     }
-    // The heap: the arrays of each column of variable-length arrays in the order of the rows, compact. A format derived
-    // from the values takes Q descriptors when P ones cannot hold a count or an offset; a P of the caller's is refused
-    // then.
-    std::uint64_t heap = 0;
-    for (std::size_t i = 0; i < table.columns.size(); ++i) {
-        column_model& model = table.columns[i];
-        column_format& format = model.format;
-        if (format.storage == column_storage::fixed) {
-            continue;
-        }
-        std::uint64_t most = 0;
-        bool wide = false;
-        for (const std::uint64_t count : model.counts) {
-            // An empty array has no offset, which "should be set to zero" (standard §7.3.5).
-            model.heap_offsets.push_back(count == 0 ? 0 : heap);
-            wide = wide || count > max_p || (count > 0 && heap > max_p);
-            heap = checked_sum(heap, array_bytes(format.type, count, hdu), hdu);
-            most = std::max(most, count);
-        }
-        if (wide && format.storage == column_storage::variable_p) {
-            if (!model.derived) {
-                forbid(errc::invalid_column_format,
-                       "the P descriptors of " + column_name(i + 1) +
-                           " cannot hold the counts or offsets of its arrays in the heap, which need Q ones",
-                       hdu, i + 1, "TFORM" + std::to_string(i + 1));
-            }
-            format.storage = column_storage::variable_q;
-        }
-        format.max_elements = std::max(format.max_elements.value_or(0), most);
-    }
-    // The offsets of the fields follow from the descriptors chosen.
-    if (!ascii) {
-        offset = 0;
-        for (column_model& model : table.columns) {
-            model.info.offset = offset;
-            offset = checked_sum(offset, model.format.field_size(), hdu);
-        }
-    }
-    for (column_model& model : table.columns) {
-        model.info.format = model.format;
-    }
-    table.heap_size = heap;
+    const std::uint64_t heap = lay_out_heap(table, 0, hdu);
+    lay_out_fields(table, ascii, hdu);
+    const std::uint64_t row_size = table.info.row_size;
+    const std::uint64_t rows = info.rows;
     table.info = std::move(info);
     table.info.columns.clear();
-    table.info.row_size = offset;
-    table.info.heap_offset = checked_product(offset, table.info.rows, hdu);
-    table.info.heap_size = heap;
-    (void)checked_sum(table.info.heap_offset, checked_sum(heap, block_size, hdu), hdu);
+    table.info.row_size = row_size;
+    set_sizes(table, rows, heap, hdu);
     return table;
+}
+
+table_model resolve_streamed_table(table_info info, const table_write_options& options, std::uint64_t hdu)
+{
+    check_table(info, options, hdu);
+    const bool ascii = info.kind == hdu_kind::table;
+    table_model table;
+    table.options = options;
+    table.columns.reserve(info.columns.size());
+    bool variable = false;
+    for (std::size_t i = 0; i < info.columns.size(); ++i) {
+        const std::uint64_t number = i + 1;
+        column_model model;
+        model.info = std::move(info.columns[i]);
+        if (!model.info.format) {
+            refuse(column_name(number) + " of a streamed table has no format, which its header gives before its rows",
+                   hdu, number);
+        }
+        model.format = *model.info.format;
+        check_format(model, ascii, hdu, number);
+        variable = variable || model.format.storage != column_storage::fixed;
+        table.columns.push_back(std::move(model));
+    }
+    if (variable && info.rows == 0) {
+        throw usage_error(errc::invalid_argument,
+                          "the streamed table of unit " + std::to_string(hdu) +
+                              " has variable-length arrays, whose heap follows its rows: it needs their number",
+                          {.hdu = hdu});
+    }
+    lay_out_fields(table, ascii, hdu);
+    const std::uint64_t row_size = table.info.row_size;
+    const std::uint64_t rows = info.rows;
+    table.info = std::move(info);
+    table.info.columns.clear();
+    table.info.row_size = row_size;
+    set_sizes(table, rows, 0, hdu);
+    return table;
+}
+
+table_model resolve_rows(const table_model& table, std::span<const column_values> values, std::uint64_t heap_base,
+                         std::uint64_t hdu)
+{
+    if (values.size() != table.columns.size()) {
+        throw usage_error(errc::invalid_argument,
+                          "the table of unit " + std::to_string(hdu) + " has " + std::to_string(table.columns.size()) +
+                              " columns, and its rows give values for " + std::to_string(values.size()),
+                          {.hdu = hdu});
+    }
+    table_model part;
+    part.options = table.options;
+    part.info.kind = table.info.kind;
+    part.info.row_size = table.info.row_size;
+    part.columns.reserve(table.columns.size());
+    std::optional<std::uint64_t> rows;
+    for (std::size_t i = 0; i < table.columns.size(); ++i) {
+        column_model model;
+        model.info = table.columns[i].info;
+        model.format = table.columns[i].format;
+        model.format.max_elements.reset();
+        model.values = column_values_access::view(values[i]);
+        if (!rows) {
+            rows = rows_of(model, hdu);
+        }
+        part.columns.push_back(std::move(model));
+    }
+    for (std::size_t i = 0; i < part.columns.size(); ++i) {
+        check_values(part.columns[i], rows.value_or(0), hdu, i + 1);
+    }
+    const std::uint64_t heap = lay_out_heap(part, heap_base, hdu);
+    set_sizes(part, rows.value_or(0), heap, hdu);
+    return part;
 }
 
 std::vector<card> table_cards(const table_model& table)
@@ -1052,14 +1207,19 @@ void write_heap(output_sink& sink, const table_model& table, const std::vector<e
     flush();
 }
 
-void write_binary_rows(output_sink& sink, const table_model& table, const std::function<void(std::uint64_t)>& advance,
-                       std::uint64_t hdu, std::size_t transfer)
+std::vector<element_writer> element_writers(const table_model& table, std::uint64_t hdu)
 {
     std::vector<element_writer> writers;
     writers.reserve(table.columns.size());
     for (std::size_t c = 0; c < table.columns.size(); ++c) {
         writers.push_back(make_element_writer(table.columns[c], hdu, c + 1, table.options));
     }
+    return writers;
+}
+
+void write_binary_rows(output_sink& sink, const table_model& table, const std::vector<element_writer>& writers,
+                       const std::function<void(std::uint64_t)>& advance, std::size_t transfer)
+{
     const std::uint64_t row_size = table.info.row_size;
     const std::uint64_t rows = table.info.rows;
     if (row_size > 0 && rows > 0) {
@@ -1099,23 +1259,36 @@ void write_binary_rows(output_sink& sink, const table_model& table, const std::f
             done += count;
         }
     }
+}
+
+// The rows of a table, then its heap, without the fill.
+void write_rows_and_heap(output_sink& sink, const table_model& table, const std::function<void(std::uint64_t)>& advance,
+                         std::uint64_t hdu, std::size_t transfer)
+{
+    if (table.info.kind == hdu_kind::table) {
+        write_ascii_rows(sink, table, advance, hdu, transfer);
+        return;
+    }
+    const std::vector<element_writer> writers = element_writers(table, hdu);
+    write_binary_rows(sink, table, writers, advance, transfer);
     write_heap(sink, table, writers, advance, hdu, transfer);
 }
 
-} // namespace
-
-void write_table_data(output_sink& sink, const table_model& table, const std::function<void(std::uint64_t)>& advance,
-                      std::uint64_t hdu, std::size_t transfer)
+// The rows of a table alone, its descriptors pointing into its heap.
+void write_rows(output_sink& sink, const table_model& table, const std::function<void(std::uint64_t)>& advance,
+                std::uint64_t hdu, std::size_t transfer)
 {
-    transfer = std::max<std::size_t>(transfer, 1);
-    const bool ascii = table.info.kind == hdu_kind::table;
-    if (ascii) {
+    if (table.info.kind == hdu_kind::table) {
         write_ascii_rows(sink, table, advance, hdu, transfer);
-    } else {
-        write_binary_rows(sink, table, advance, hdu, transfer);
+        return;
     }
-    // The fill of the last block: spaces for an ASCII table (standard §7.2.3), zeros otherwise (§7.3.3).
-    const std::uint64_t size = table.info.heap_offset + table.heap_size;
+    write_binary_rows(sink, table, element_writers(table, hdu), advance, transfer);
+}
+
+// The fill of the last block of data of size bytes: spaces for an ASCII table (standard §7.2.3), zeros otherwise
+// (§7.3.3).
+void write_fill(output_sink& sink, bool ascii, std::uint64_t size, const std::function<void(std::uint64_t)>& advance)
+{
     const std::uint64_t fill = (block_size - (size % block_size)) % block_size;
     if (fill > 0) {
         std::array<std::byte, block_size> padding{};
@@ -1125,6 +1298,105 @@ void write_table_data(output_sink& sink, const table_model& table, const std::fu
         sink.write(std::span<const std::byte>(padding).first(fill));
         advance(fill);
     }
+}
+
+// The sum of bytes that lie at offset in the data of a unit, among the 32-bit integers of standard §4.4.2.7.
+std::uint32_t sum_at(std::span<const std::byte> bytes, std::uint64_t offset) noexcept
+{
+    checksum_accumulator sum;
+    sum.add_zeros(offset % 4U);
+    sum.add(bytes);
+    return sum.sum();
+}
+
+} // namespace
+
+void write_table_data(output_sink& sink, const table_model& table, const std::function<void(std::uint64_t)>& advance,
+                      std::uint64_t hdu, std::size_t transfer)
+{
+    transfer = std::max<std::size_t>(transfer, 1);
+    write_rows_and_heap(sink, table, advance, hdu, transfer);
+    write_fill(sink, table.info.kind == hdu_kind::table, table.info.heap_offset + table.heap_size, advance);
+}
+
+streamed_table write_streamed_table(output_sink& sink, const table_model& table, const table_rows& rows,
+                                    const std::function<void(std::uint64_t)>& advance, std::uint64_t hdu,
+                                    std::size_t transfer)
+{
+    transfer = std::max<std::size_t>(transfer, 1);
+    const bool ascii = table.info.kind == hdu_kind::table;
+    const std::uint64_t row_size = table.info.row_size;
+    const std::uint64_t expected = table.info.rows;
+    const bool variable = std::ranges::any_of(
+        table.columns, [](const column_model& model) { return model.format.storage != column_storage::fixed; });
+    streamed_table result;
+    result.emax.reserve(table.columns.size());
+    for (const column_model& model : table.columns) {
+        result.emax.push_back(model.format.max_elements.value_or(0));
+    }
+    // The rows of a table with a heap are written where they lie once their arrays are in the heap after them: zeros
+    // until then.
+    const std::uint64_t start = sink.position();
+    if (variable) {
+        sink.write_zeros(expected * row_size);
+        advance(expected * row_size);
+    }
+    std::uint64_t written = table.columns.empty() ? expected : 0;
+    while (!table.columns.empty() && (expected == 0 || written < expected)) {
+        const std::vector<column_values> chunk = rows(written);
+        if (chunk.empty()) {
+            break;
+        }
+        const table_model part = resolve_rows(table, chunk, result.heap, hdu);
+        const std::uint64_t count = part.info.rows;
+        if (count == 0) {
+            break;
+        }
+        if (expected != 0 && count > expected - written) {
+            throw usage_error(errc::invalid_argument,
+                              "the rows of the streamed table of unit " + std::to_string(hdu) + " are more than the " +
+                                  std::to_string(expected) + " of its model",
+                              {.hdu = hdu});
+        }
+        if (variable) {
+            const std::vector<element_writer> writers = element_writers(part, hdu);
+            write_heap(sink, part, writers, advance, hdu, transfer);
+            memory_sink staged;
+            write_binary_rows(staged, part, writers, [](std::uint64_t) {}, transfer);
+            const std::uint64_t offset = written * row_size;
+            sink.rewrite(start + offset, staged.data());
+            result.rows_sum = add_sums(result.rows_sum, sum_at(staged.data(), offset));
+        } else {
+            write_rows(sink, part, advance, hdu, transfer);
+        }
+        for (std::size_t c = 0; c < part.columns.size(); ++c) {
+            result.emax[c] = std::max(result.emax[c], part.columns[c].format.max_elements.value_or(0));
+        }
+        result.heap = checked_sum(result.heap, part.heap_size, hdu);
+        written += count;
+    }
+    if (expected != 0 && written != expected) {
+        throw usage_error(errc::invalid_argument,
+                          "the rows of the streamed table of unit " + std::to_string(hdu) + " are " +
+                              std::to_string(written) + ", and its model has " + std::to_string(expected),
+                          {.hdu = hdu});
+    }
+    result.rows = written;
+    write_fill(sink, ascii, checked_sum(checked_product(written, row_size, hdu), result.heap, hdu), advance);
+    return result;
+}
+
+table_model completed_table(table_model table, const streamed_table& written, std::uint64_t hdu)
+{
+    for (std::size_t c = 0; c < table.columns.size(); ++c) {
+        column_model& model = table.columns[c];
+        if (model.format.storage != column_storage::fixed) {
+            model.format.max_elements = written.emax[c];
+            model.info.format = model.format;
+        }
+    }
+    set_sizes(table, written.rows, written.heap, hdu);
+    return table;
 }
 
 } // namespace openfits::detail

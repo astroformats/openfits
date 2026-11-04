@@ -1130,19 +1130,19 @@ void analyze_compressed_image(const header& cards, std::uint64_t index, std::uin
     };
     const std::string name = string_of("ZCMPTYPE");
     if (name == "RICE_ONE") {
-        log.info(errc::invalid_compression, "ZCMPTYPE is 'RICE_ONE', the name of RICE_1 in old files, read as RICE_1",
-                 about("ZCMPTYPE"));
+        log.info(errc::invalid_compression, "10.1.1",
+                 "ZCMPTYPE is 'RICE_ONE', the name of RICE_1 in old files, read as RICE_1", about("ZCMPTYPE"));
     }
     if (name == "RICE_1" || name == "RICE_ONE") {
         if (string_of("ZNAME2") == "NOISEBIT") {
-            log.warning(errc::invalid_compression,
+            log.warning(errc::invalid_compression, "10.4.1",
                         "ZNAME2 is 'NOISEBIT', a parameter of very old files, and RICE_1 is read with BYTEPIX 4",
                         about("ZNAME2"));
         }
         const std::optional<std::int64_t> block = integer_of("ZVAL1");
         const std::optional<std::int64_t> bytes = integer_of("ZVAL2");
         if (block && bytes && *block < 16 && *bytes > 8) {
-            log.warning(errc::invalid_compression,
+            log.warning(errc::invalid_compression, "10.4.1",
                         "ZVAL1 and ZVAL2 of RICE_1 are reversed, " + std::to_string(*block) + " and " +
                             std::to_string(*bytes) + ", as old files have them, and read as BLOCKSIZE " +
                             std::to_string(*bytes) + " and BYTEPIX " + std::to_string(*block),
@@ -1151,7 +1151,7 @@ void analyze_compressed_image(const header& cards, std::uint64_t index, std::uin
     }
     for (const std::string_view keyword : {std::string_view("ZSCALE"), std::string_view("ZZERO")}) {
         if (cards.index_of(keyword)) {
-            log.info(errc::invalid_compression,
+            log.info(errc::invalid_compression, "10.1.3",
                      std::string(keyword) + " is a keyword, as old files have it, rather than a column: a constant of "
                                             "every tile (standard §10.1.3)",
                      about(keyword));

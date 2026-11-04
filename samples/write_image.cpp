@@ -7,9 +7,11 @@
 // them, which stores unsigned 16-bit values (standard §5.2.5). A second unit holds the same frame converted to
 // floating point and scaled back into 16-bit integers, as programs that keep physical values do. A third holds the
 // frame compressed with RICE_1 in tiles of 16 rows (standard §10.1): a binary table that a reader presents as the
-// image, its tiles decompressed as they are read. Every unit gets DATASUM and CHECKSUM (standard §4.4.2.7), which let a
-// reader verify it. The file is replaced only once it is complete. The program then reads the file back, verifies the
-// checksums of each unit, and prints what it holds; the reads of the whole images verify DATASUM as well.
+// image, its tiles decompressed as they are read. A fourth holds the background of the sky alone, computed row by row
+// as the save writes it, which takes the memory of a chunk however large the frame. Every unit gets DATASUM and
+// CHECKSUM (standard §4.4.2.7), which let a reader verify it. The file is replaced only once it is complete. The
+// program then reads the file back, verifies the checksums of each unit, and prints what it holds; the reads of the
+// whole images verify DATASUM as well.
 //
 // Usage: write_image <path>
 
@@ -119,6 +121,18 @@ int main(int argc, char** argv)
         (void)output.add_image(
             packed, std::span<const std::uint16_t>(values),
             {.compression = openfits::compression_options{.type = openfits::compression::rice, .tile = {width, 16}}});
+        // A frame whose values the save asks for chunk after chunk, whole rows of them, as it writes them: computed
+        // then, they are never held whole.
+        openfits::image_info sky;
+        sky.geometry.axes = {width, height};
+        sky.header.set("EXTNAME", "SKY");
+        (void)output.add_image<std::uint16_t>(sky, [](std::uint64_t first, std::span<std::uint16_t> rows) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                const std::uint64_t x = (first + i) % width;
+                const std::uint64_t y = (first + i) / width;
+                rows[i] = static_cast<std::uint16_t>(1000 + (2 * x) + y);
+            }
+        });
         // The checksums, with the time they were computed as their comment, again the application's.
         output.save(path,
                     {.checksums = true, .checksum_time = openfits::to_date_time(observed + std::chrono::hours{2})});
@@ -146,7 +160,11 @@ int main(int argc, char** argv)
         std::cout << "compressed: " << file.hdu(rice).data_size().value_or(0) << " bytes of table for "
                   << values.size() * 2 << " of values, " << (unpacked == values ? "read back as written" : "changed")
                   << '\n';
-        return read == values && unpacked == values && verified ? 0 : 1;
+        const std::vector<std::uint16_t> background = file.read_pixels<std::uint16_t>(file.hdu("SKY").index());
+        std::cout << "streamed: " << background.front() << " to " << background.back() << '\n';
+        const std::size_t last = background.back();
+        const bool computed = last == 1000 + (2 * (width - 1)) + (height - 1);
+        return read == values && unpacked == values && computed && verified ? 0 : 1;
     } catch (const std::exception& failure) {
         (void)std::fputs("write_image: ", stderr);
         (void)std::fputs(failure.what(), stderr);

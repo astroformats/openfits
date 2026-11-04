@@ -68,8 +68,9 @@ protected:
     }
 
     // The value of the keyword as a string, joined with its CONTINUE records, or nothing when it holds no string; a
-    // warning when it holds another value.
-    std::optional<std::string> string_of(std::string_view keyword, std::optional<std::uint64_t> column)
+    // warning of the section of the standard that defines it when it holds another value.
+    std::optional<std::string> string_of(std::string_view keyword, std::optional<std::uint64_t> column,
+                                         std::string_view section)
     {
         const std::optional<std::size_t> position = cards_.index_of(keyword);
         if (!position || !cards_[*position].has_value_indicator()) {
@@ -80,15 +81,17 @@ protected:
             return joined_string(cards_.cards(), *position);
         }
         if (kind != value_kind::undefined) {
-            log_.warning(errc::reserved_keyword,
+            log_.warning(errc::reserved_keyword, section,
                          quote(keyword) + " does not hold a string, as the standard requires, and is ignored",
                          with_column(at(*position), column));
         }
         return std::nullopt;
     }
 
-    // The value of the keyword as a number, or nothing when it holds none; a warning when it holds another value.
-    std::optional<double> number_of(std::string_view keyword, std::optional<std::uint64_t> column)
+    // The value of the keyword as a number, or nothing when it holds none; a warning of the section of the standard
+    // that defines it when it holds another value.
+    std::optional<double> number_of(std::string_view keyword, std::optional<std::uint64_t> column,
+                                    std::string_view section)
     {
         const std::optional<std::size_t> position = cards_.index_of(keyword);
         if (!position || !cards_[*position].has_value_indicator()) {
@@ -99,7 +102,7 @@ protected:
             return cards_.value<double>(keyword);
         }
         if (value.kind() != value_kind::undefined) {
-            log_.warning(errc::reserved_keyword,
+            log_.warning(errc::reserved_keyword, section,
                          quote(keyword) + " does not hold a number, as the standard requires, and is ignored",
                          with_column(at(*position), column));
         }
@@ -152,14 +155,14 @@ public:
             return std::nullopt;
         }
         if (*bitpix != 8) {
-            diagnostics().error(errc::invalid_structure,
+            diagnostics().error(errc::invalid_structure, mandatory_section(),
                                 "BITPIX of a table is 8 (standard §7.2.1, §7.3.1), and is " + std::to_string(*bitpix) +
                                     " here, which leaves the columns unknown",
                                 about("BITPIX"));
             usable_ = false;
         }
         if (*naxis != 2) {
-            diagnostics().error(errc::invalid_structure,
+            diagnostics().error(errc::invalid_structure, mandatory_section(),
                                 "NAXIS of a table is 2 (standard §7.2.1, §7.3.1), and is " + std::to_string(*naxis) +
                                     " here, which leaves the columns unknown",
                                 about("NAXIS"));
@@ -211,13 +214,13 @@ private:
         const std::optional<std::size_t> position = header_cards().index_of("TFIELDS");
         if (!position) {
             diagnostics().error(
-                errc::missing_keyword,
+                errc::missing_keyword, mandatory_section(),
                 "the mandatory keyword 'TFIELDS' is missing from the table, which leaves its columns unknown",
                 about("TFIELDS"));
             return std::nullopt;
         }
         if (*position != 7) {
-            diagnostics().warning(errc::keyword_order,
+            diagnostics().warning(errc::keyword_order, mandatory_section(),
                                   "the mandatory keyword 'TFIELDS' is record " + std::to_string(*position + 1) +
                                       " of the header, where the standard places it at record 8",
                                   at(*position));
@@ -229,17 +232,17 @@ private:
         } else {
             fields = checked_integer("TFIELDS");
             if (!fields) {
-                diagnostics().error(errc::keyword_type, "the mandatory keyword 'TFIELDS' holds no integer",
-                                    at(*position));
+                diagnostics().error(errc::keyword_type, mandatory_section(),
+                                    "the mandatory keyword 'TFIELDS' holds no integer", at(*position));
                 return std::nullopt;
             }
-            diagnostics().warning(errc::keyword_type,
+            diagnostics().warning(errc::keyword_type, mandatory_section(),
                                   "the mandatory keyword 'TFIELDS' holds no integer, and is read as " +
                                       std::to_string(*fields),
                                   at(*position));
         }
         if (*fields < 0 || *fields > max_fields) {
-            diagnostics().error(errc::invalid_structure,
+            diagnostics().error(errc::invalid_structure, mandatory_section(),
                                 "TFIELDS is " + std::to_string(*fields) +
                                     ", which is not from 0 to 999 (standard §7.2.1, §7.3.1)",
                                 at(*position));
@@ -268,16 +271,16 @@ private:
         }
         const std::optional<std::int64_t> theap = checked_integer("THEAP");
         if (!theap || header_cards()[*position].value().kind() != value_kind::integer) {
-            diagnostics().warning(errc::reserved_keyword,
+            diagnostics().warning(errc::reserved_keyword, "7.3.2",
                                   "THEAP does not hold an integer, and the heap follows the rows", at(*position));
             return true;
         }
         if (pcount == 0) {
-            diagnostics().warning(errc::reserved_keyword,
+            diagnostics().warning(errc::reserved_keyword, "7.3.2",
                                   "THEAP is given with PCOUNT = 0, which the standard forbids (§7.3.2)", at(*position));
         }
         if (std::cmp_less(*theap, rows)) {
-            diagnostics().error(errc::invalid_structure,
+            diagnostics().error(errc::invalid_structure, "7.3.5",
                                 "THEAP is " + std::to_string(*theap) + ", before the end of the rows at byte " +
                                     std::to_string(rows) + " of the data (standard §7.3.5)",
                                 at(*position));
@@ -285,7 +288,7 @@ private:
         }
         const auto heap = static_cast<std::uint64_t>(*theap);
         if (heap - rows > pcount) {
-            diagnostics().error(errc::invalid_structure,
+            diagnostics().error(errc::invalid_structure, "7.3.5",
                                 "THEAP is " + std::to_string(heap) + ", beyond the end of the data at byte " +
                                     std::to_string(rows + pcount) + " (standard §7.3.5)",
                                 at(*position));
@@ -303,13 +306,14 @@ private:
         const std::string keyword = indexed("TFORM", n);
         const std::optional<std::size_t> position = header_cards().index_of(keyword);
         if (!position) {
-            diagnostics().error(errc::missing_keyword,
+            diagnostics().error(errc::missing_keyword, mandatory_section(),
                                 "the mandatory keyword " + quote(keyword) + " is missing from the table",
                                 about(keyword, n));
             return std::nullopt;
         }
         if (header_cards()[*position].value().kind() != value_kind::string) {
-            diagnostics().error(errc::keyword_type, quote(keyword) + " holds no string", at(*position, n));
+            diagnostics().error(errc::keyword_type, mandatory_section(), quote(keyword) + " holds no string",
+                                at(*position, n));
             return std::nullopt;
         }
         const std::string text = joined_string(header_cards().cards(), *position);
@@ -330,14 +334,14 @@ private:
                     lowered.reset();
                 }
                 if (lowered) {
-                    diagnostics().warning(errc::invalid_column_format,
+                    diagnostics().warning(errc::invalid_column_format, mandatory_section(),
                                           quote(keyword) + " is " + quote(text) + ", in lower case, which is read as " +
                                               quote(upper),
                                           at(*position, n));
                     return lowered;
                 }
             }
-            diagnostics().error(refusal.code(), refusal.what(), at(*position, n));
+            diagnostics().error(refusal.code(), mandatory_section(), refusal.what(), at(*position, n));
             return std::nullopt;
         }
     }
@@ -350,8 +354,10 @@ private:
         }
         column_info column;
         column.format = format;
-        column.name = std::string(trim_trailing_spaces(string_of(indexed("TTYPE", n), n).value_or("")));
-        column.unit = std::string(trim_trailing_spaces(string_of(indexed("TUNIT", n), n).value_or("")));
+        column.name =
+            std::string(trim_trailing_spaces(string_of(indexed("TTYPE", n), n, reserved_section()).value_or("")));
+        column.unit =
+            std::string(trim_trailing_spaces(string_of(indexed("TUNIT", n), n, reserved_section()).value_or("")));
         read_scaling(column, *format, n);
         read_null(column, *format, n);
         read_display(column, *format, n);
@@ -371,12 +377,12 @@ private:
             type != column_type::character && type != column_type::logical && type != column_type::bit;
         for (const std::string_view root : {std::string_view("TSCAL"), std::string_view("TZERO")}) {
             const std::string keyword = indexed(root, n);
-            const std::optional<double> value = number_of(keyword, n);
+            const std::optional<double> value = number_of(keyword, n, reserved_section());
             if (!value) {
                 continue;
             }
             if (!scalable) {
-                diagnostics().warning(errc::reserved_keyword,
+                diagnostics().warning(errc::reserved_keyword, reserved_section(),
                                       quote(keyword) +
                                           " is given for a column of characters, logicals or bits, which the "
                                           "standard forbids, and is ignored",
@@ -386,7 +392,7 @@ private:
             if (root == "TSCAL") {
                 column.scaling.scale = *value;
                 if (*value == 0.0) {
-                    diagnostics().error(errc::reserved_keyword,
+                    diagnostics().error(errc::reserved_keyword, reserved_section(),
                                         quote(keyword) +
                                             " is 0, which leaves the physical values of the column unavailable",
                                         about(keyword, n));
@@ -414,7 +420,7 @@ private:
             } else {
                 // A number without quotes, as some writers give it: its text.
                 column.null_string = std::string(value.value_text());
-                diagnostics().warning(errc::reserved_keyword,
+                diagnostics().warning(errc::reserved_keyword, "7.2.2",
                                       quote(keyword) + " of an ASCII table holds no string, and its text " +
                                           quote(value.value_text()) + " is read as the null string",
                                       at(*position, n));
@@ -425,7 +431,7 @@ private:
         const bool integers = type == column_type::uint8 || type == column_type::int16 || type == column_type::int32 ||
                               type == column_type::int64;
         if (!integers) {
-            diagnostics().warning(errc::reserved_keyword,
+            diagnostics().warning(errc::reserved_keyword, "7.3.2",
                                   quote(keyword) + " is given for a column that is not of integers, which the standard "
                                                    "forbids (§7.3.2), and is ignored",
                                   at(*position, n));
@@ -435,7 +441,7 @@ private:
             column.null = *integer;
             return;
         }
-        diagnostics().warning(errc::reserved_keyword,
+        diagnostics().warning(errc::reserved_keyword, "7.3.2",
                               quote(keyword) +
                                   " does not hold an integer of 64 bits, as the standard requires, and is ignored",
                               at(*position, n));
@@ -445,7 +451,7 @@ private:
     void read_display(column_info& column, const column_format& format, std::uint64_t n)
     {
         const std::string keyword = indexed("TDISP", n);
-        const std::optional<std::string> text = string_of(keyword, n);
+        const std::optional<std::string> text = string_of(keyword, n, display_section());
         if (!text) {
             return;
         }
@@ -453,7 +459,7 @@ private:
             const display_format display = display_format::parse(*text);
             if (!displays(display, format)) {
                 diagnostics().warning(
-                    errc::invalid_display_format,
+                    errc::invalid_display_format, display_section(),
                     quote(keyword) + " is " + quote(*text) +
                         ", which cannot display the values of the column (standard §7.3.4), and is ignored",
                     about(keyword, n));
@@ -461,8 +467,8 @@ private:
             }
             column.display = display;
         } catch (const invalid_data_error& refusal) {
-            diagnostics().warning(errc::invalid_display_format, std::string(refusal.what()) + "; it is ignored",
-                                  about(keyword, n));
+            diagnostics().warning(errc::invalid_display_format, display_section(),
+                                  std::string(refusal.what()) + "; it is ignored", about(keyword, n));
         }
     }
 
@@ -470,15 +476,15 @@ private:
     void read_dimensions(column_info& column, const column_format& format, std::uint64_t n)
     {
         const std::string keyword = indexed("TDIM", n);
-        if (const std::optional<std::string> text = string_of(keyword, n)) {
+        if (const std::optional<std::string> text = string_of(keyword, n, "7.3.2")) {
             const std::optional<std::vector<std::uint64_t>> dimensions = parse_dimensions(*text);
             if (!dimensions) {
-                diagnostics().warning(errc::invalid_dimensions,
+                diagnostics().warning(errc::invalid_dimensions, "7.3.2",
                                       quote(keyword) + " is " + quote(*text) +
                                           ", which is not of the form (l,m,...) of standard §7.3.2, and is ignored",
                                       about(keyword, n));
             } else if (format.storage == column_storage::fixed && elements(*dimensions) > format.repeat) {
-                diagnostics().warning(errc::invalid_dimensions,
+                diagnostics().warning(errc::invalid_dimensions, "7.3.2",
                                       quote(keyword) + " is " + quote(*text) + ", an array larger than the " +
                                           std::to_string(format.repeat) +
                                           " elements of the field (standard §7.3.2), and is ignored",
@@ -499,20 +505,20 @@ private:
         const std::string keyword = indexed("TBCOL", n);
         const std::optional<std::size_t> position = header_cards().index_of(keyword);
         if (!position) {
-            diagnostics().error(errc::missing_keyword,
+            diagnostics().error(errc::missing_keyword, "7.2.1",
                                 "the mandatory keyword " + quote(keyword) + " is missing from the ASCII table",
                                 about(keyword, n));
             return false;
         }
         const std::optional<std::int64_t> start = checked_integer(keyword);
         if (!start || header_cards()[*position].value().kind() != value_kind::integer) {
-            diagnostics().error(errc::keyword_type, quote(keyword) + " holds no integer", at(*position, n));
+            diagnostics().error(errc::keyword_type, "7.2.1", quote(keyword) + " holds no integer", at(*position, n));
             return false;
         }
         const std::uint64_t width = format.field_size();
         if (*start < 1 || static_cast<std::uint64_t>(*start) - 1 > row_size ||
             width > row_size - (static_cast<std::uint64_t>(*start) - 1)) {
-            diagnostics().error(errc::invalid_structure,
+            diagnostics().error(errc::invalid_structure, "7.2.1",
                                 quote(keyword) + " is " + std::to_string(*start) + ", and the field of " +
                                     std::to_string(width) + " characters from it does not lie within the " +
                                     std::to_string(row_size) + " characters of a row (standard §7.2.1)",
@@ -536,7 +542,7 @@ private:
             size = std::numeric_limits<std::uint64_t>::max();
         }
         if (size > std::numeric_limits<std::uint64_t>::max() - offset) {
-            diagnostics().error(errc::invalid_column_format,
+            diagnostics().error(errc::invalid_column_format, "",
                                 "the fields of the columns up to " + std::to_string(n) + " do not fit in 64 bits",
                                 about(indexed("TFORM", n), n));
             usable_ = false;
@@ -550,13 +556,13 @@ private:
     void check_row_size(std::uint64_t fields, std::uint64_t row_size)
     {
         if (fields > row_size) {
-            diagnostics().error(errc::invalid_column_format,
+            diagnostics().error(errc::invalid_column_format, "7.3.1",
                                 "the fields of the columns take " + std::to_string(fields) +
                                     " bytes, beyond NAXIS1 = " + std::to_string(row_size) + " (standard §7.3.1, Eq. 8)",
                                 about("NAXIS1"));
             usable_ = false;
         } else if (fields < row_size) {
-            diagnostics().warning(errc::invalid_column_format,
+            diagnostics().warning(errc::invalid_column_format, "7.3.1",
                                   "the fields of the columns take " + std::to_string(fields) +
                                       " bytes, fewer than NAXIS1 = " + std::to_string(row_size) +
                                       " (standard §7.3.1, Eq. 8); the rest of each row is unused",
@@ -570,7 +576,7 @@ private:
         for (const std::size_t i : header_cards().matching("TFORM#")) {
             const std::optional<std::uint32_t> n = keyword_index(header_cards()[i].keyword(), "TFORM");
             if (n && *n > fields && header_cards()[i].has_value_indicator()) {
-                diagnostics().warning(errc::invalid_structure,
+                diagnostics().warning(errc::invalid_structure, mandatory_section(),
                                       "TFIELDS is " + std::to_string(fields) + ", and " +
                                           quote(header_cards()[i].keyword()) + " is ignored",
                                       at(i));
@@ -588,6 +594,23 @@ private:
             product *= length;
         }
         return product;
+    }
+
+    // The sections of the standard of the mandatory keywords, of the other reserved keywords and of the display formats
+    // of the kind of table.
+    [[nodiscard]] std::string_view mandatory_section() const noexcept
+    {
+        return ascii_ ? "7.2.1" : "7.3.1";
+    }
+
+    [[nodiscard]] std::string_view reserved_section() const noexcept
+    {
+        return ascii_ ? "7.2.2" : "7.3.2";
+    }
+
+    [[nodiscard]] std::string_view display_section() const noexcept
+    {
+        return ascii_ ? "7.2.2" : "7.3.4";
     }
 
     bool ascii_;
@@ -631,8 +654,9 @@ public:
                 }
                 group_parameter& parameter = groups.parameters[*n - 1];
                 if (root == "PTYPE") {
-                    parameter.name = std::string(trim_trailing_spaces(string_of(keyword, std::nullopt).value_or("")));
-                } else if (const std::optional<double> value = number_of(keyword, std::nullopt)) {
+                    parameter.name =
+                        std::string(trim_trailing_spaces(string_of(keyword, std::nullopt, "6.1.2").value_or("")));
+                } else if (const std::optional<double> value = number_of(keyword, std::nullopt, "6.1.2")) {
                     (root == "PSCAL" ? parameter.scaling.scale : parameter.scaling.zero) = *value;
                 }
             }
@@ -652,7 +676,7 @@ private:
         const bool zero = (value.kind() == value_kind::real && value.get<double>() == 0.0) ||
                           (std::holds_alternative<std::int64_t>(value.data()) && value.get<std::int64_t>() == 0);
         if (zero) {
-            diagnostics().error(errc::reserved_keyword,
+            diagnostics().error(errc::reserved_keyword, "6.1.2",
                                 quote(keyword) + " is 0, which leaves the physical values of the parameter unavailable",
                                 at(position));
         }

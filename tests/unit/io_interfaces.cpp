@@ -8,10 +8,12 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace {
 
@@ -79,6 +81,24 @@ TEST(output_sink, cannot_rewrite_and_finishes_without_doing_anything_by_default)
     EXPECT_TRUE(throws<openfits::usage_error>(errc::invalid_argument, [&] { sink.rewrite(0, data); }));
     sink.finish();
     EXPECT_EQ(sink.position(), 4U);
+}
+
+// The zeros of a sink are written through write() by default, in pieces of at most 1 MiB.
+TEST(output_sink, writes_zeros_through_write_by_default)
+{
+    std::vector<std::size_t> pieces;
+    std::uint64_t nonzero = 0;
+    openfits::callback_sink sink([&](std::span<const std::byte> bytes) {
+        pieces.push_back(bytes.size());
+        nonzero +=
+            static_cast<std::uint64_t>(std::ranges::count_if(bytes, [](std::byte b) { return b != std::byte{0}; }));
+    });
+    sink.write_zeros((std::uint64_t{5} << 19U) + 3);
+    EXPECT_EQ(pieces, (std::vector<std::size_t>{1U << 20U, 1U << 20U, (1U << 19U) + 3}));
+    EXPECT_EQ(nonzero, 0U);
+    EXPECT_EQ(sink.position(), (std::uint64_t{5} << 19U) + 3);
+    sink.write_zeros(0);
+    EXPECT_EQ(pieces.size(), 3U);
 }
 
 TEST(random_access_device, is_called_one_call_at_a_time_keeps_its_size_and_flushes_without_doing_anything_by_default)

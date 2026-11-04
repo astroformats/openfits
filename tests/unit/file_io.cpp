@@ -261,6 +261,33 @@ TEST(native_file, reads_and_writes_in_calls_of_the_transfer_size)
     }
 }
 
+// The temporary file of an inflated gzip file: read and written, removed by the system once closed, and never made
+// where something exists.
+TEST(native_file, a_scratch_file_is_removed_once_it_is_closed)
+{
+    const temp_directory directory;
+    const std::string path = directory.file("scratch.tmp");
+    {
+        std::optional<native_file> file = native_file::create_scratch(path);
+        ASSERT_TRUE(file.has_value());
+        if (file) {
+            const std::vector<std::byte> data = pattern(5000);
+            file->write_at(0, data);
+            file->write_at(5000, data);
+            EXPECT_EQ(file->size(), 10'000U);
+            std::vector<std::byte> read(5000);
+            file->read_at(5000, read);
+            EXPECT_EQ(read, data);
+        }
+    }
+    EXPECT_EQ(directory.entries(), 0U);
+    write_file(directory.path() / "taken.tmp", pattern(10));
+    EXPECT_FALSE(native_file::create_scratch(directory.file("taken.tmp")).has_value());
+    EXPECT_EQ(bytes(read_file(directory.path() / "taken.tmp")), pattern(10));
+    EXPECT_TRUE(throws<io_error>(errc::open_failed,
+                                 [&] { (void)native_file::create_scratch(directory.file("missing/scratch.tmp")); }));
+}
+
 TEST(native_file, a_read_that_meets_the_end_in_a_later_turn_is_end_of_data_where_the_file_ends)
 {
     // 30 bytes at 80 of a file of 100, 7 at a time: 80, 87, then a turn at 94 that gets 6 bytes, and one at 100 that
@@ -543,6 +570,29 @@ TEST(file_sink, rewrites_bytes_already_written)
     sink.finish();
 
     EXPECT_EQ(read_file(directory.path() / "image.fits"), "01ab456789!");
+}
+
+// Zeros make the file longer, which the system fills with them, and the bytes after them follow; they can be
+// rewritten as any others.
+TEST(file_sink, makes_its_file_longer_for_zeros)
+{
+    const temp_directory directory;
+    file_sink sink(directory.file("zeros.bin"));
+    sink.write(bytes("ab"));
+    sink.write_zeros(100000);
+    sink.write(bytes("z"));
+    sink.write_zeros(0);
+    EXPECT_EQ(sink.position(), 100003U);
+    sink.rewrite(50000, bytes("m"));
+    sink.finish();
+    const std::string content = read_file(directory.path() / "zeros.bin");
+    ASSERT_EQ(content.size(), 100003U);
+    EXPECT_EQ(content.substr(0, 2), "ab");
+    EXPECT_EQ(content.back(), 'z');
+    EXPECT_EQ(content[50000], 'm');
+    EXPECT_EQ(std::ranges::count(content, '\0'), 99999);
+    // A finished sink takes nothing more.
+    EXPECT_TRUE(throws<usage_error>(errc::invalid_argument, [&] { sink.write_zeros(1); }));
 }
 
 TEST(file_sink, a_sink_destroyed_before_finish_leaves_the_target_as_it_was)

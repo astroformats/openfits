@@ -453,4 +453,10 @@ column_values column_values::arrays(std::span<const std::string> values) noexcep
     return result;
 }
 
+table_info without_structural(table_info table)
+{
+    table.header = without_structural(table.header);
+    return table;
+}
+
 } // namespace openfits

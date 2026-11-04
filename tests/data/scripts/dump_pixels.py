@@ -19,6 +19,12 @@ import numpy as np
 from astropy.io import fits
 
 
+def dump_path(path: Path, suffix: str) -> Path:
+    """The dump of a sample, whose name ends in .fits or .fit, maybe followed by .fz or .gz: b15-mef.fits.fz has
+    b15-mef.cards, as the tests of the samples find it."""
+    return path.with_name(path.name[:path.name.rfind('.fit')] + suffix)
+
+
 def text(value) -> str:
     if isinstance(value, (np.floating, float)):
         return repr(float(value))
@@ -36,7 +42,7 @@ def dump(path: Path):
                 values = np.asarray(unit.data).ravel()
                 lines.append('\t'.join([str(index), values.dtype.name, str(values.size)]))
                 lines.extend(text(value) for value in values)
-    path.with_suffix('.pixels').write_bytes(('\n'.join(lines) + '\n').encode('ascii'))
+    dump_path(path, '.pixels').write_bytes(('\n'.join(lines) + '\n').encode('ascii'))
 
 
 def main():

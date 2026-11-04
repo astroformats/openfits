@@ -618,7 +618,7 @@ compressed_unit compress_table(const table_model& model, std::span<const std::by
                                        std::string(algorithm_name(wanted)) + " does not compress column " +
                                            std::to_string(c + 1) + " of the table of unit " + std::to_string(hdu) +
                                            " (standard §10.3.5)",
-                                       {.hdu = hdu, .column = c + 1});
+                                       {.hdu = hdu, .keyword = "ZCTYP" + std::to_string(c + 1), .column = c + 1});
             }
             algorithms[c] = *chosen;
             continue;

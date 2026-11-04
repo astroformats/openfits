@@ -86,12 +86,23 @@ struct value_field
 
 /// The text of a string (standard §4.2.1.1): in quotes, each quote doubled, and padded with spaces to eight characters
 /// unless it is empty, the null string, as readers that expect the fixed format of old want it.
-/// @throws validation_error with errc::invalid_character for a character outside printable ASCII.
-[[nodiscard]] std::string format_string(std::string_view value);
+/// @throws validation_error with errc::invalid_character for a character outside printable ASCII, unless any_bytes.
+[[nodiscard]] std::string format_string(std::string_view value, bool any_bytes = false);
 
 /// The text of any value, as a value field holds it: format_integer(), format_real() and format_string() for those
 /// kinds, T or F, (real, imaginary) for complex values, and nothing for an undefined value.
 /// @throws validation_error as the functions above, and with errc::invalid_value for a value of value_kind::none.
-[[nodiscard]] std::string format_value(const card_value& value);
+[[nodiscard]] std::string format_value(const card_value& value, bool any_bytes = false);
+
+/// The value of text alone, the value text of a card without a record: what read_value_field() reads when the text is
+/// one value and nothing after it, departures from the standard included; none otherwise.
+[[nodiscard]] card_value value_of_text(std::string_view text);
+
+/// Checks that text is one value of the forms of standard §4.2 and nothing else, as a writer writes a value text: a
+/// departure that a reader tolerates, such as a lowercase exponent letter, is refused, and a byte outside printable
+/// ASCII only when not any_bytes.
+/// @throws validation_error with the code of the first departure, errc::invalid_value for a text of no form or with
+/// more than one value.
+void check_value_text(std::string_view text, bool any_bytes);
 
 } // namespace openfits::detail

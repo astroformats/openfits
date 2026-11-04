@@ -213,6 +213,26 @@ std::optional<native_file> native_file::create_new(const std::string& path, std:
     return native_file(handle, std::move(name));
 }
 
+std::optional<native_file> native_file::create_scratch(const std::string& path)
+{
+    // Readable and writable by the owner alone, and removed from its directory at once: the open handle keeps the
+    // file until it is closed, by the process or at its end.
+    const int handle = ::open(path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (handle < 0) {
+        const std::error_code error = last_error();
+        if (error == std::errc::file_exists) {
+            return std::nullopt;
+        }
+        fail(errc::open_failed, "cannot create the temporary file " + path, error);
+    }
+    native_file file(handle, path);
+    if (::unlink(path.c_str()) != 0) {
+        const std::error_code error = last_error();
+        fail(errc::open_failed, "cannot remove the temporary file " + path + " from its directory", error);
+    }
+    return file;
+}
+
 std::uint64_t native_file::size() const
 {
     struct stat status{};

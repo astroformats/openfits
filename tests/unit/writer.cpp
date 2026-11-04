@@ -440,7 +440,10 @@ TEST(writer, writes_the_conventions_outside_the_standard_only_when_asked)
     object_info.header.set("OBJECT", object);
     (void)long_object.add_image(object_info, std::span<const std::uint8_t>(values));
     EXPECT_TRUE(throws<validation_error>(errc::continued_reserved_keyword, [&] { (void)written(long_object); }));
-    const reader object_input = open(written(long_object, {.continue_reserved_keywords = true}));
+    // A file that departs from standard §4.2.1.2 on purpose, which written() would refuse.
+    openfits::memory_sink continued;
+    long_object.save(continued, {.continue_reserved_keywords = true});
+    const reader object_input = open(continued.release());
     EXPECT_EQ(object_input.hdu(0).header().value<std::string>("OBJECT"), object);
     EXPECT_EQ(object_input.hdu(0).header().count("CONTINUE"), 2U);
 }
@@ -589,7 +592,8 @@ TEST(writer, writes_data_in_chunks_of_any_size)
         openfits::memory_sink sink;
         std::uint64_t bytes = 0;
         openfits::detail::write_image_data(
-            sink, conversion, numeric_type::uint16, std::as_bytes(std::span(values)),
+            sink, conversion, numeric_type::uint16, values.size(), 37,
+            openfits::detail::borrowed_values(std::as_bytes(std::span(values)), numeric_type::uint16),
             [&bytes](std::uint64_t written_bytes) { bytes += written_bytes; }, transfer);
         EXPECT_EQ(bytes, 2880U) << transfer;
         outputs.emplace_back(sink.data().begin(), sink.data().end());
@@ -791,8 +795,48 @@ TEST(writer, counts_the_records_of_a_header_as_a_save_writes_them)
     const write_options continuing{.continue_reserved_keywords = true};
     const std::size_t records = continued.header_records(0, continuing);
     EXPECT_EQ(records, 9U);
-    const std::vector<std::byte> file = written(continued, continuing);
+    // A file that departs from standard §4.2.1.2 on purpose, which written() would refuse.
+    openfits::memory_sink sink;
+    continued.save(sink, continuing);
+    const std::vector<std::byte> file = sink.release();
     EXPECT_EQ(openfits::test::text(file).substr((records - 1) * 80, 80), std::string("END").append(77, ' '));
+}
+
+// A model read from a file is written again in one line, its header without the structural cards that the writer
+// makes from the model.
+TEST(writer, writes_back_a_model_read_from_a_file_in_one_line)
+{
+    const checked_model model;
+    image_info scaled = image_of({3});
+    scaled.bitpix = bitpix::int16;
+    scaled.scaling = {.scale = 0.5, .zero = 10.0};
+    scaled.blank = -1;
+    scaled.header.set("OBJECT", "scaled");
+    const std::vector<double> values{10.0, std::numeric_limits<double>::quiet_NaN(), 12.5};
+    writer first;
+    (void)first.add_image(scaled, std::span<const double>(values));
+    (void)first.add_table(
+        {.kind = openfits::hdu_kind::table, .rows = 3, .columns = {{.name = "NAME"}, {.name = "COUNT"}}},
+        std::vector<openfits::column_values>{std::span(model.names), std::span(model.counts)});
+    const reader input = open(written(first, {.checksums = true}));
+
+    const std::vector<double> read = input.read_pixels<double>(0);
+    const std::vector<std::string> names = input.read_strings(1, 0, {.trim_strings = true});
+    const std::vector<std::int32_t> counts = input.read_column<std::int32_t>(1, 1);
+    writer again;
+    (void)again.add_image(openfits::without_structural(input.image(0)), std::span<const double>(read));
+    (void)again.add_table(openfits::without_structural(input.table(1)),
+                          std::vector<openfits::column_values>{std::span(names), std::span(counts)});
+    const std::vector<std::byte> file = written(again);
+    const reader output = open(file);
+    EXPECT_EQ(output.image(0).scaling, scaled.scaling);
+    EXPECT_EQ(output.image(0).blank, -1);
+    EXPECT_EQ(output.hdu(0).header().value<std::string>("OBJECT"), "scaled");
+    EXPECT_FALSE(output.hdu(0).header().contains("CHECKSUM"));
+    EXPECT_EQ(output.read_pixels<std::int16_t>(0, {.scaling = openfits::scaling_policy::raw}),
+              input.read_pixels<std::int16_t>(0, {.scaling = openfits::scaling_policy::raw}));
+    EXPECT_EQ(output.table(1).columns, input.table(1).columns);
+    EXPECT_EQ(output.read_strings(1, 0, {.trim_strings = true}), model.names);
 }
 
 } // namespace

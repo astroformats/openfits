@@ -505,6 +505,10 @@ bool header::rename(std::string_view from, std::string_view to)
         record += text.substr(8);
         std::vector<diagnostic> departures;
         cards_[*position] = detail::parse_record(record, departures);
+    } else if (text.empty() && old.has_value_indicator() && !old.value_text().empty() &&
+               !detail::is_commentary_keyword(name)) {
+        // A card of a value text keeps it.
+        cards_[*position] = card::with_value_text(name, old.value_text(), old.comment());
     } else {
         const std::size_t continued = detail::continuation_length(cards_, *position);
         card renamed =
@@ -541,7 +545,8 @@ std::size_t header::free_cards() const noexcept
 
 std::string header::to_string(bool commentary) const
 {
-    const detail::record_options options{.hierarch = true, .truncate_comment = true};
+    const detail::record_options options{
+        .hierarch = true, .truncate_comment = true, .non_ascii = detail::byte_policy::keep};
     std::string result;
     const std::size_t end = cards_.size() - free_cards();
     for (std::size_t i = 0; i < end; ++i) {

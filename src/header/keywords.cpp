@@ -227,4 +227,44 @@ std::optional<value_class> reserved_value_class(std::string_view name)
     return class_of(classified_shapes, shape_of(name));
 }
 
+std::string_view reserved_section(std::string_view name)
+{
+    using section_of = std::pair<std::string_view, std::string_view>;
+    static constexpr auto named = std::to_array<section_of>({
+        {"DATE", "4.4.2.1"},     {"ORIGIN", "4.4.2.1"},   {"EXTEND", "4.4.2.1"},     {"BLOCKED", "4.4.2.1"},
+        {"DATE-OBS", "4.4.2.2"}, {"TELESCOP", "4.4.2.2"}, {"INSTRUME", "4.4.2.2"},   {"OBSERVER", "4.4.2.2"},
+        {"OBJECT", "4.4.2.2"},   {"AUTHOR", "4.4.2.3"},   {"REFERENC", "4.4.2.3"},   {"COMMENT", "4.4.2.4"},
+        {"HISTORY", "4.4.2.4"},  {"", "4.4.2.4"},         {"CONTINUE", "4.4.2.4"},   {"BSCALE", "4.4.2.5"},
+        {"BZERO", "4.4.2.5"},    {"BUNIT", "4.4.2.5"},    {"BLANK", "4.4.2.5"},      {"DATAMAX", "4.4.2.5"},
+        {"DATAMIN", "4.4.2.5"},  {"EXTNAME", "4.4.2.6"},  {"EXTVER", "4.4.2.6"},     {"EXTLEVEL", "4.4.2.6"},
+        {"CHECKSUM", "4.4.2.7"}, {"DATASUM", "4.4.2.7"},  {"INHERIT", "Appendix K"}, {"FZALGOR", "10.3.3"},
+        {"FZTILELN", "10.3.3"},
+    });
+    static constexpr auto shaped = std::to_array<section_of>({
+        {"PTYPE#", "6.1.2"},
+        {"PSCAL#", "6.1.2"},
+        {"PZERO#", "6.1.2"},
+        {"TDMIN#", "7.3.2"},
+        {"TDMAX#", "7.3.2"},
+        {"TLMIN#", "7.3.2"},
+        {"TLMAX#", "7.3.2"},
+        {"FZALG#", "10.3.3"},
+    });
+    for (const section_of& entry : named) {
+        if (entry.first == name) {
+            return entry.second;
+        }
+    }
+    if (std::ranges::any_of(name, is_digit)) {
+        const std::string shape = shape_of(name);
+        for (const section_of& entry : shaped) {
+            if (entry.first == shape) {
+                return entry.second;
+            }
+        }
+    }
+    // The keywords of world coordinates and of time, which Table 22 lists with the types of their values.
+    return "8.2";
+}
+
 } // namespace openfits::detail

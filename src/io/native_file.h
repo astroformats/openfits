@@ -64,6 +64,12 @@ public:
     /// file it becomes, which error messages use. Throws io_error with errc::open_failed.
     [[nodiscard]] static std::optional<native_file> create_new(const std::string& path, std::string name);
 
+    /// Creates a file for reading and writing at path, which the system removes once it is closed, also when the
+    /// process ends abruptly: on Windows a file deleted on close, and on POSIX systems a file removed from its
+    /// directory as soon as it is created. Returns nothing when something exists at path already. Throws io_error with
+    /// errc::open_failed.
+    [[nodiscard]] static std::optional<native_file> create_scratch(const std::string& path);
+
     native_file(native_file&& other) noexcept
         : handle_(std::exchange(other.handle_, closed_handle)), name_(std::move(other.name_))
     {}
