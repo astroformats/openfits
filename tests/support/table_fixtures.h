@@ -6,10 +6,10 @@
 #include "support/fixture_builder.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -62,11 +62,14 @@ class byte_writer
 public:
     template <typename T> byte_writer& value(T number)
     {
-        const std::size_t at = bytes_.size();
-        bytes_.resize(at + sizeof(T));
-        std::memcpy(bytes_.data() + at, &number, sizeof(T));
+        // Appended byte by byte: GCC 13 at -O3 on s390x takes a copy into the end of a vector just grown by resize()
+        // for an overflow.
+        auto bytes = std::bit_cast<std::array<std::byte, sizeof(T)>>(number);
         if constexpr (std::endian::native == std::endian::little) {
-            std::reverse(bytes_.begin() + static_cast<std::ptrdiff_t>(at), bytes_.end());
+            std::ranges::reverse(bytes);
+        }
+        for (const std::byte byte : bytes) {
+            bytes_.push_back(byte);
         }
         return *this;
     }

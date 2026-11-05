@@ -39,8 +39,19 @@ openfits_add_sample(copy_hdu "${CMAKE_CURRENT_BINARY_DIR}/copy_hdu.fits"
 openfits_add_sample(verify "${PROJECT_SOURCE_DIR}/tests/data/astropy/d3-ascii-table.fits"
                     "${PROJECT_SOURCE_DIR}/tests/data/gzip/d6-gzip.fits.gz")
 
+# update_keyword changes a copy of a file with checksums, made again before each run.
+add_test(NAME example.update_keyword_copy
+    COMMAND "${CMAKE_COMMAND}" -E copy "${PROJECT_SOURCE_DIR}/tests/data/astropy/c2-mef-checksum.fits"
+            "${CMAKE_CURRENT_BINARY_DIR}/update_keyword.fits")
+set_tests_properties(example.update_keyword_copy PROPERTIES LABELS example FIXTURES_SETUP update_keyword_file)
+openfits_add_sample(update_keyword "${CMAKE_CURRENT_BINARY_DIR}/update_keyword.fits[SCI,2]" "FILTER='R'"
+                    "EXPTIME=300.0" -GAIN)
+set_tests_properties(example.update_keyword PROPERTIES
+    FIXTURES_REQUIRED update_keyword_file
+    PASS_REGULAR_EXPRESSION "written in place over the 2880 bytes of the header.*CHECKSUM valid, DATASUM valid")
+
 # The files that the samples write conform to the standard: their report holds no finding, whose line would fail it.
-set(writing_samples write_image stream_io convert compress copy_hdu)
+set(writing_samples write_image stream_io convert compress copy_hdu update_keyword)
 set(written_by_samples)
 foreach(name IN LISTS writing_samples)
     set_tests_properties(example.${name} PROPERTIES FIXTURES_SETUP sample_files)

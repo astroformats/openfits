@@ -6,6 +6,7 @@
 #include <openfits/card.h>
 #include <openfits/checksum.h>
 #include <openfits/compression.h>
+#include <openfits/editor.h>
 #include <openfits/error.h>
 #include <openfits/export.h>
 #include <openfits/hdu.h>

@@ -317,17 +317,6 @@ std::span<std::byte> within(std::span<std::byte> bytes, std::uint64_t offset, st
     return bytes.subspan(offset, size);
 }
 
-// The name of a keyword in bytes 1 to 8 of the record of a card, which keeps its value and comment where they are.
-card renamed(const card& original, std::string_view name)
-{
-    std::string text(original.text());
-    text.resize(record_length, ' ');
-    std::string field(name);
-    field.resize(8, ' ');
-    text.replace(0, 8, field);
-    return card::parse(text);
-}
-
 bool is_indexed(std::string_view name, std::string_view root) noexcept
 {
     return name.starts_with(root) && name.size() > root.size() &&
@@ -425,7 +414,7 @@ header restored_table_header(const header& compressed)
         const std::string_view name = entry.keyword();
         const auto restore = [&](std::string_view from) {
             if (const std::optional<std::size_t> position = compressed.index_of(from)) {
-                restored.push_back(renamed(compressed[*position], name));
+                restored.push_back(renamed_card(compressed[*position], name));
             }
         };
         if (name == "NAXIS1" || name == "NAXIS2" || name == "PCOUNT") {
@@ -435,18 +424,18 @@ header restored_table_header(const header& compressed)
         } else if (name == "THEAP") {
             // CFITSIO keeps the THEAP of the table as it was, which gives the heap of both.
             if (ztheap) {
-                restored.push_back(renamed(compressed[*ztheap], "THEAP"));
+                restored.push_back(renamed_card(compressed[*ztheap], "THEAP"));
             } else {
                 restored.push_back(entry);
             }
         } else if (name == "ZTHEAP") {
             if (!has_theap) {
-                restored.push_back(renamed(entry, "THEAP"));
+                restored.push_back(renamed_card(entry, "THEAP"));
             }
         } else if (name == "ZHECKSUM") {
-            restored.push_back(renamed(entry, "CHECKSUM"));
+            restored.push_back(renamed_card(entry, "CHECKSUM"));
         } else if (name == "ZDATASUM") {
-            restored.push_back(renamed(entry, "DATASUM"));
+            restored.push_back(renamed_card(entry, "DATASUM"));
         } else if (name == "CHECKSUM" || name == "DATASUM" || name == "ZTABLE" || name == "ZTILELEN" ||
                    name == "ZNAXIS1" || name == "ZNAXIS2" || name == "ZPCOUNT" || name == "ZHEAPPTR" ||
                    is_indexed(name, "ZFORM") || is_indexed(name, "ZCTYP")) {

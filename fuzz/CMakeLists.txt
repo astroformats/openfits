@@ -91,6 +91,7 @@ openfits_add_fuzz_target(fuzz_hcompress SOURCES hcompress.cpp MIN_COVERAGE 200)
 openfits_add_fuzz_target(fuzz_quantize SOURCES quantize.cpp MIN_COVERAGE 100)
 openfits_add_fuzz_target(fuzz_tiles SOURCES tiles.cpp MIN_COVERAGE 500)
 openfits_add_fuzz_target(fuzz_tiled_table SOURCES tiled_table.cpp MIN_COVERAGE 500)
+openfits_add_fuzz_target(fuzz_editor SOURCES editor.cpp MIN_COVERAGE 500)
 
 # The replay driver finds seeds under a path that no ANSI code page of Windows holds.
 if(mode STREQUAL "replay")

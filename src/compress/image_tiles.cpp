@@ -147,17 +147,6 @@ std::optional<tile_column> find_column(const table_info& table, std::string_view
     return tile_column{.index = *index, .offset = column.offset, .format = *column.format};
 }
 
-// The name of a keyword in bytes 1 to 8 of the record of a card, which keeps its value and comment where they are.
-card renamed(const card& original, std::string_view name)
-{
-    std::string text(original.text());
-    text.resize(record_length, ' ');
-    std::string field(name);
-    field.resize(8, ' ');
-    text.replace(0, 8, field);
-    return card::parse(text);
-}
-
 // True when name is root followed by the digits of a positive number.
 bool is_indexed(std::string_view name, std::string_view root) noexcept
 {
@@ -259,7 +248,8 @@ double real_at(std::span<const std::byte> field, column_type type)
     for (std::size_t i = 0; i < size; ++i) {
         bits = (bits << 8U) | std::to_integer<std::uint64_t>(field[i]);
     }
-    if (type == column_type::uint8) {
+    // The integers of 1 to 8 bytes; the columns of other types are refused when the image is described.
+    if (type == column_type::uint8 || size == 0 || size > 8) {
         return static_cast<double>(bits);
     }
     const auto shift = static_cast<unsigned>(64 - (size * 8));
@@ -1062,6 +1052,26 @@ private:
 
 } // namespace
 
+card renamed_card(const card& original, std::string_view name)
+{
+    if (original.text().empty()) {
+        // A card that a change made has no record: the same value, or text, under the other name.
+        if (!original.has_value_indicator()) {
+            return card::commentary(name, original.comment());
+        }
+        if (!original.value_text().empty()) {
+            return card::with_value_text(name, original.value_text(), original.comment());
+        }
+        return {name, original.value(), original.comment()};
+    }
+    std::string text(original.text());
+    text.resize(record_length, ' ');
+    std::string field(name);
+    field.resize(8, ' ');
+    text.replace(0, 8, field);
+    return card::parse(text);
+}
+
 std::optional<tile_algorithm> algorithm_of(std::string_view name) noexcept
 {
     name = trim_trailing_spaces(name);
@@ -1345,7 +1355,7 @@ header restored_image_header(const header& table)
     std::vector<card> restored;
     const auto add = [&](const std::optional<std::size_t>& position, std::string_view name) {
         if (position) {
-            restored.push_back(renamed(table[*position], name));
+            restored.push_back(renamed_card(table[*position], name));
         }
     };
     const bool primary = table.index_of("ZSIMPLE").has_value();
@@ -1383,11 +1393,11 @@ header restored_image_header(const header& table)
     for (const card& entry : table.cards()) {
         const std::string_view name = entry.keyword();
         if (name == "ZHECKSUM") {
-            restored.push_back(renamed(entry, "CHECKSUM"));
+            restored.push_back(renamed_card(entry, "CHECKSUM"));
             continue;
         }
         if (name == "ZDATASUM") {
-            restored.push_back(renamed(entry, "DATASUM"));
+            restored.push_back(renamed_card(entry, "DATASUM"));
             continue;
         }
         if (is_table_keyword(name, fields)) {
@@ -1400,6 +1410,15 @@ header restored_image_header(const header& table)
         restored.push_back(entry);
     }
     return header(std::move(restored));
+}
+
+tile_payload payload_of(const compressed_image& image, std::span<const std::byte> row, std::span<const std::byte> heap,
+                        std::uint64_t index, std::uint64_t hdu)
+{
+    tile_request request = request_of(image, row, index, hdu);
+    request.payload.bytes = heap.subspan(request.data.offset, request.data.size);
+    request.payload.mask = heap.subspan(request.mask.offset, request.mask.size);
+    return request.payload;
 }
 
 void decode_tile(const compressed_image& image, std::uint64_t index, std::span<const std::uint64_t> size,

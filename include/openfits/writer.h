@@ -28,6 +28,7 @@
 
 namespace openfits {
 
+class editor;
 class reader;
 
 /// What a save to a path does when the file exists.
@@ -394,6 +395,9 @@ public:
 private:
     std::size_t add_values(image_info info, numeric_type type, std::span<const std::byte> data, image_fill fill,
                            image_write_options options);
+
+    // The editor writes the units of a writer into the file it edits, at their place in it.
+    friend class editor;
 
     struct state;
     std::unique_ptr<state> state_;
