@@ -49,6 +49,12 @@ set(internal_sources
     data/image_read.cpp
     data/image_write.cpp
     data/random_groups.cpp
+    edit/header_edit.cpp
+    edit/layout.cpp
+    edit/overlay.cpp
+    edit/patch.cpp
+    edit/rows.cpp
+    edit/tiles.cpp
     hdu/copy.cpp
     hdu/header_reader.cpp
     hdu/section.cpp
@@ -78,6 +84,7 @@ set(public_sources
     checksum.cpp
     date_time.cpp
     display_format.cpp
+    editor.cpp
     error.cpp
     hdu.cpp
     header.cpp

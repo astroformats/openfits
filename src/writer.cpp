@@ -14,6 +14,7 @@
 #include "header/emission.h"
 #include "header/record.h"
 #include "table/table_write.h"
+#include "writer_state.h"
 
 #include <algorithm>
 #include <bit>
@@ -62,105 +63,6 @@ private:
     std::uint64_t total_;
     std::uint64_t done_ = 0;
 };
-
-} // namespace
-
-struct writer::state
-{
-    // A unit as it is added: an image, its model and its values, borrowed, given by a function or reserved, or none for
-    // a header alone; a table instead when it has one, its values borrowed or its rows given by a function; or a copy
-    // of a unit of a file.
-    struct unit
-    {
-        image_info image{};
-        numeric_type type = numeric_type::uint8;
-        std::span<const std::byte> data{};
-        image_fill fill{};
-        image_write_options options{};
-        std::optional<reserved_fill> reserved{};
-        std::optional<detail::table_model> table{};
-        table_rows rows{};
-        std::optional<detail::unit_copy> copy{};
-        // The primary HDU without data that a first image compressed by its own options comes after, whose image the
-        // table names as the primary one (standard §10.1.2).
-        bool hosts_compressed_primary = false;
-    };
-
-    // A unit of the file of a save: a unit of the writer, compressed or not, or the primary HDU without data that a
-    // compressed first image needs (standard §10.1).
-    struct file_unit
-    {
-        std::optional<std::size_t> source{};
-        std::optional<detail::compressed_unit> compressed{};
-        // The bytes of its data records; nothing for a streamed table whose rows or heap are known once written.
-        std::optional<std::uint64_t> data{};
-        // Its header holds the records of checksum_cards(), which the save completes once its data are written.
-        bool sealed = false;
-    };
-
-    // The units of the file of a save, their headers formatted, the bytes of the file and of the data of its units,
-    // those of streamed tables whose size is known once they are written left out.
-    struct formatted_file
-    {
-        std::vector<file_unit> units{};
-        std::vector<std::string> headers{};
-        std::uint64_t size = 0;
-        std::uint64_t data = 0;
-        bool size_known = true;
-    };
-
-    std::vector<unit> units{};
-
-    // The compression of the unit at index: its own, or else that of options; none for a unit that has no data to
-    // compress, an image without values, a reserved image, a streamed table or a copy.
-    [[nodiscard]] std::optional<compression_options> compression_of(std::size_t index,
-                                                                    const write_options& options) const;
-
-    // The bytes of the stored values of the units that a save with options compresses.
-    [[nodiscard]] std::uint64_t compressed_bytes(const write_options& options) const;
-
-    // The file of a save with options, its units compressed, advance receiving the bytes of the values compressed.
-    [[nodiscard]] formatted_file format(const write_options& options,
-                                        const std::function<void(std::uint64_t)>& advance = {}) const;
-
-    // The header of a unit of the file, at position in it, as a save with options writes it, in whole blocks, closing
-    // with the cards of closing.
-    [[nodiscard]] std::string format_header(const file_unit& entry, std::size_t position, const write_options& options,
-                                            std::span<const card> closing) const;
-
-    // The header of a table unit at position, with the cards of the model table.
-    [[nodiscard]] static std::string table_header(const detail::table_model& table, const unit& model,
-                                                  std::size_t position, const write_options& options,
-                                                  std::span<const card> closing);
-
-    // Writes the data of a unit of the file into sink, the fill of the last block included; for a streamed table, what
-    // the write found, which completes its header.
-    std::optional<detail::streamed_table> write_data(output_sink& sink, const file_unit& entry, std::size_t position,
-                                                     const std::function<void(std::uint64_t)>& advance) const;
-
-    // The unit of the writer that a unit of the file writes, or nothing for the primary HDU that a save adds.
-    [[nodiscard]] const unit* model_of(const file_unit& entry) const noexcept
-    {
-        return entry.source ? &units[*entry.source] : nullptr;
-    }
-
-    // Throws usage_error for a unit whose header a save with options completes once its streamed data are written,
-    // which a sink that cannot rewrite refuses: the checksums of uncompressed streamed data, which a pass of their own
-    // would ask the function for again, and the NAXIS2 or the heap of a streamed table.
-    void check_streams(const write_options& options) const;
-
-    // True for a streamed table whose header is completed once its rows are written: their number, or its heap.
-    [[nodiscard]] bool completes_table(const file_unit& entry) const noexcept
-    {
-        const unit* model = model_of(entry);
-        return model != nullptr && model->rows && !entry.data;
-    }
-
-    // Writes the file to sink, as writer::save() does, without gzip.
-    void save(output_sink& sink, const write_options& options) const;
-};
-
-namespace {
 
 // The level of zlib of write_options::gzip_level, which gzip_sink takes: checked before a file is made.
 void check_gzip_level(const write_options& options)
@@ -264,6 +166,7 @@ std::size_t writer::add_values(image_info info, numeric_type type, std::span<con
             // A compressed image is an extension, after a primary HDU without data (standard §10.1).
             (void)add_header({});
             state_->units.front().hosts_compressed_primary = true;
+            state_->units.front().implicit = true;
             state_->units.push_back(std::move(entry));
             return 1;
         }
@@ -330,6 +233,7 @@ std::size_t writer::add_table(table_info info, std::span<const column_values> va
     detail::table_model table = detail::resolve_table(std::move(info), values, options, index);
     if (primary_first) {
         (void)add_header({});
+        state_->units.front().implicit = true;
     }
     state_->units.push_back({.options = {.reserved_cards = options.reserved_cards,
                                          .overflow = options.overflow,
@@ -351,6 +255,7 @@ std::size_t writer::add_table(table_info info, table_rows rows, const table_writ
     detail::table_model table = detail::resolve_streamed_table(std::move(info), options, index);
     if (primary_first) {
         (void)add_header({});
+        state_->units.front().implicit = true;
     }
     state_->units.push_back({.options = {.reserved_cards = options.reserved_cards,
                                          .overflow = options.overflow,
@@ -369,6 +274,7 @@ std::size_t writer::add_hdu(const reader& source, std::size_t index, hdu_copy_op
         detail::plan_copy(source, detail::reader_access::source(source), index, position, std::move(options));
     if (primary_first) {
         (void)add_header({});
+        state_->units.front().implicit = true;
     }
     state_->units.push_back({.copy = std::move(copy)});
     return position;
@@ -444,40 +350,54 @@ std::uint64_t writer::state::compressed_bytes(const write_options& options) cons
 }
 
 writer::state::formatted_file writer::state::format(const write_options& options,
-                                                    const std::function<void(std::uint64_t)>& advance) const
+                                                    const std::function<void(std::uint64_t)>& advance,
+                                                    detail::unit_placement where) const
 {
     if (units.empty()) {
         throw usage_error(errc::invalid_argument, "the writer has no unit to save");
     }
     formatted_file file;
+    file.first = where.first;
     file.units.reserve(units.size() + 1);
     for (std::size_t i = 0; i < units.size(); ++i) {
+        const unit& model = units[i];
+        if (where.extension && model.implicit) {
+            continue;
+        }
         const std::optional<compression_options> compression = compression_of(i, options);
-        if (i == 0 && compression) {
+        if (i == 0 && compression && !where.extension) {
             // A first image that the options of the file compress: a primary HDU without data before it.
             file.units.push_back({});
         }
         file_unit entry{.source = i};
-        const unit& model = units[i];
+        const std::size_t position = where.first + file.units.size();
+        if (model.copy) {
+            // The copy as it takes its place, which it is converted to.
+            entry.copy = *model.copy;
+            entry.copy->form = detail::copy_form_at(*model.copy->unit, position);
+        }
         if (compression && model.table) {
             // The data of the table as an uncompressed table holds them, then compressed column by column.
             memory_sink rows;
-            detail::write_table_data(rows, *model.table, [](std::uint64_t) {}, file.units.size());
+            detail::write_table_data(rows, *model.table, [](std::uint64_t) {}, position);
             const std::uint64_t size = (model.table->info.rows * model.table->info.row_size) + model.table->heap_size;
             entry.compressed = detail::compress_table(*model.table, rows.data().first(static_cast<std::size_t>(size)),
-                                                      *compression, file.units.size(), advance);
+                                                      *compression, position, advance);
         } else if (compression) {
-            const std::size_t position = file.units.size();
             const detail::write_conversion conversion = conversion_of(model.image, model.type, model.options, position);
             const detail::image_values values = model.fill ? detail::streamed_values(model.fill, model.type)
                                                            : detail::borrowed_values(model.data, model.type);
             // The first image of the writer is the primary one, after the primary HDU that a save or the writer added.
             const file_unit& first = file.units.front();
-            const bool primary = position == 1 && (!first.source || units[*first.source].hosts_compressed_primary);
+            const bool primary = !where.extension && file.units.size() == 1 &&
+                                 (!first.source || units[*first.source].hosts_compressed_primary);
             entry.compressed = detail::compress_image(model.image, conversion, model.type, values, *compression,
                                                       primary, position, advance);
         }
         file.units.push_back(std::move(entry));
+    }
+    if (file.units.empty()) {
+        throw usage_error(errc::invalid_argument, "the writer has no unit to place after the first unit of a file");
     }
     std::vector<std::string>& headers = file.headers;
     headers.reserve(file.units.size());
@@ -488,19 +408,20 @@ writer::state::formatted_file writer::state::format(const write_options& options
     for (std::size_t p = 0; p < file.units.size(); ++p) {
         file_unit& entry = file.units[p];
         const unit* model = model_of(entry);
-        if (model != nullptr && model->copy) {
+        const std::size_t position = where.first + p;
+        if (entry.copy) {
             // A copy keeps its header as it is when it can, and its checksums with it.
-            const detail::unit_copy& copy = *model->copy;
-            if (detail::header_as_is(copy, records_of(options, p), options.checksums)) {
+            const detail::unit_copy& copy = *entry.copy;
+            if (detail::header_as_is(copy, records_of(options, position), options.checksums)) {
                 headers.push_back(detail::source_header(copy));
             } else {
                 entry.sealed = options.checksums || detail::has_checksum_cards(copy);
-                headers.push_back(format_header(entry, p, options, closing_of(entry.sealed)));
+                headers.push_back(format_header(entry, position, options, closing_of(entry.sealed)));
             }
             entry.data = detail::copy_data_size(copy);
         } else {
             entry.sealed = options.checksums;
-            headers.push_back(format_header(entry, p, options, closing_of(entry.sealed)));
+            headers.push_back(format_header(entry, position, options, closing_of(entry.sealed)));
             if (entry.compressed) {
                 entry.data = detail::data_records(entry.compressed->data.size());
             } else if (model == nullptr) {
@@ -547,10 +468,10 @@ std::string writer::state::format_header(const file_unit& entry, std::size_t pos
                                       .longstrn = options.longstrn,
                                       .reserved_cards = model->options.reserved_cards,
                                       .closing = closing};
-    if (model->copy) {
+    if (entry.copy) {
         // The header written anew keeps the fill space of the cards it writes.
-        emission.reserved_cards = detail::copy_fill(*model->copy);
-        return detail::header_blocks(detail::copy_records(*model->copy), detail::copy_cards(*model->copy), emission);
+        emission.reserved_cards = detail::copy_fill(*entry.copy);
+        return detail::header_blocks(detail::copy_records(*entry.copy), detail::copy_cards(*entry.copy), emission);
     }
     if (entry.compressed) {
         return detail::header_blocks(entry.compressed->cards,
@@ -579,8 +500,8 @@ std::optional<detail::streamed_table> writer::state::write_data(output_sink& sin
         advance(data.size() + fill.size());
         return std::nullopt;
     }
-    if (model->copy) {
-        detail::write_copy_data(sink, *model->copy, advance);
+    if (entry.copy) {
+        detail::write_copy_data(sink, *entry.copy, advance);
         return std::nullopt;
     }
     if (model->table) {
@@ -672,43 +593,51 @@ void writer::state::save(output_sink& sink, const write_options& options) const
         }
     }
     for (std::size_t i = 0; i < count; ++i) {
-        const file_unit& entry = file.units[i];
-        const std::uint64_t start = sink.position();
-        sink.write(std::as_bytes(std::span(headers[i])));
-        progress.advance(headers[i].size());
-        if (!rewrite || (!entry.sealed && !completes_table(entry))) {
-            (void)write_data(sink, entry, i, advance);
-            continue;
-        }
-        detail::summing_sink data(&sink);
-        const std::optional<detail::streamed_table> written = write_data(data, entry, i, advance);
-        std::string& blocks = headers[i];
-        detail::byte_range changed{.offset = 0, .size = blocks.size()};
-        const unit* model = model_of(entry);
-        if (written && model != nullptr && model->table) {
-            // The header of the table as its rows made it: their number, the heap and the emax of each column of
-            // variable-length arrays, in records of the same places.
-            const std::vector<card> closing = entry.sealed ? checksum_cards_of(options) : std::vector<card>();
-            std::string completed =
-                table_header(detail::completed_table(*model->table, *written, i), *model, i, options, closing);
-            if (completed.size() != blocks.size()) {
-                throw validation_error(errc::value_too_long,
-                                       "the header of unit " + std::to_string(i) +
-                                           " takes more blocks once the rows of its table are written",
-                                       {.hdu = i});
-            }
-            blocks = std::move(completed);
-        }
-        if (entry.sealed) {
-            const std::uint32_t sum = detail::add_sums(data.sum(), written ? written->rows_sum : 0);
-            const detail::byte_range sealed = detail::seal_checksums(blocks, sum, comment, records_of(options, i));
-            if (!written) {
-                changed = sealed;
-            }
-        }
-        sink.rewrite(start + changed.offset, std::as_bytes(std::span(blocks)).subspan(changed.offset, changed.size));
+        write_unit(sink, file, i, options, advance);
     }
     sink.finish();
+}
+
+void writer::state::write_unit(output_sink& sink, formatted_file& file, std::size_t index, const write_options& options,
+                               const std::function<void(std::uint64_t)>& advance) const
+{
+    const file_unit& entry = file.units[index];
+    const std::size_t position = file.first + index;
+    std::string& blocks = file.headers[index];
+    const std::uint64_t start = sink.position();
+    sink.write(std::as_bytes(std::span(blocks)));
+    advance(blocks.size());
+    if (!sink.can_rewrite() || (!entry.sealed && !completes_table(entry))) {
+        (void)write_data(sink, entry, position, advance);
+        return;
+    }
+    detail::summing_sink data(&sink);
+    const std::optional<detail::streamed_table> written = write_data(data, entry, position, advance);
+    detail::byte_range changed{.offset = 0, .size = blocks.size()};
+    const unit* model = model_of(entry);
+    if (written && model != nullptr && model->table) {
+        // The header of the table as its rows made it: their number, the heap and the emax of each column of
+        // variable-length arrays, in records of the same places.
+        const std::vector<card> closing = entry.sealed ? checksum_cards_of(options) : std::vector<card>();
+        std::string completed = table_header(detail::completed_table(*model->table, *written, position), *model,
+                                             position, options, closing);
+        if (completed.size() != blocks.size()) {
+            throw validation_error(errc::value_too_long,
+                                   "the header of unit " + std::to_string(position) +
+                                       " takes more blocks once the rows of its table are written",
+                                   {.hdu = position});
+        }
+        blocks = std::move(completed);
+    }
+    if (entry.sealed) {
+        const std::uint32_t sum = detail::add_sums(data.sum(), written ? written->rows_sum : 0);
+        const detail::byte_range sealed =
+            detail::seal_checksums(blocks, sum, checksum_comment(options), records_of(options, position));
+        if (!written) {
+            changed = sealed;
+        }
+    }
+    sink.rewrite(start + changed.offset, std::as_bytes(std::span(blocks)).subspan(changed.offset, changed.size));
 }
 
 void writer::save(output_sink& sink, const write_options& options) const

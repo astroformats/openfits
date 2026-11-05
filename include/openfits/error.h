@@ -131,6 +131,11 @@ enum class errc
                         ///< an ASCII table (standard §3.3.2, §7.2.3, §7.3.3).
     repeated_hdu_name,  ///< Units of the same type with the same EXTNAME and EXTVER, which standard §4.4.2.6 recommends
                         ///< against.
+
+    not_editable, ///< A file or a part of one that the editor cannot change as asked: a gzip-compressed file, the
+                  ///< fields of a compressed table or of variable-length arrays, which a rewrite of the table changes,
+                  ///< tiles of a compressed image that the library cannot encode again, or a file that a failed
+                  ///< commit in place left damaged.
 };
 
 /// Where in a file a problem was found. Empty or absent members are unknown or do not apply.

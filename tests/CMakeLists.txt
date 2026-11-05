@@ -34,6 +34,7 @@ endfunction()
 
 openfits_add_test_executable(openfits_tests
     concurrency/columns.cpp
+    concurrency/editor.cpp
     concurrency/gzip.cpp
     concurrency/io.cpp
     concurrency/pixels.cpp
@@ -76,6 +77,12 @@ openfits_add_test_executable(openfits_tests
     unit/decimal.cpp
     unit/device_io.cpp
     unit/diagnostic_log.cpp
+    unit/edit_header.cpp
+    unit/edit_layout.cpp
+    unit/edit_patch.cpp
+    unit/editor.cpp
+    unit/editor_commit.cpp
+    unit/editor_data.cpp
     unit/endian.cpp
     unit/error.cpp
     unit/file_io.cpp

@@ -62,6 +62,27 @@ bool needs_primary_before(const hdu_info& unit) noexcept
     return unit.kind() != hdu_kind::primary && unit.kind() != hdu_kind::random_groups && unit.kind() != hdu_kind::image;
 }
 
+copy_form copy_form_at(const hdu_info& unit, std::size_t position)
+{
+    switch (unit.kind()) {
+    case hdu_kind::random_groups:
+        if (position > 0) {
+            throw usage_error(errc::invalid_argument,
+                              "the random groups of unit " + std::to_string(unit.index()) +
+                                  " are the primary HDU of a file (standard §6), and cannot follow unit " +
+                                  std::to_string(position - 1),
+                              {.hdu = unit.index()});
+        }
+        return copy_form::as_is;
+    case hdu_kind::primary:
+        return position > 0 ? copy_form::to_extension : copy_form::as_is;
+    case hdu_kind::image:
+        return position == 0 ? copy_form::to_primary : copy_form::as_is;
+    default:
+        return copy_form::as_is;
+    }
+}
+
 unit_copy plan_copy(const reader& source, const thread_safe_source& bytes, std::size_t index, std::size_t position,
                     hdu_copy_options options)
 {
@@ -71,26 +92,7 @@ unit_copy plan_copy(const reader& source, const thread_safe_source& bytes, std::
                                  "the header of unit " + std::to_string(index) + " gives no size for its data",
                                  {.hdu = index});
     }
-    copy_form form = copy_form::as_is;
-    switch (unit.kind()) {
-    case hdu_kind::random_groups:
-        if (position > 0) {
-            throw usage_error(errc::invalid_argument,
-                              "the random groups of unit " + std::to_string(index) +
-                                  " are the primary HDU of a file (standard §6), and cannot follow unit " +
-                                  std::to_string(position - 1),
-                              {.hdu = index});
-        }
-        break;
-    case hdu_kind::primary:
-        form = position > 0 ? copy_form::to_extension : copy_form::as_is;
-        break;
-    case hdu_kind::image:
-        form = position == 0 ? copy_form::to_primary : copy_form::as_is;
-        break;
-    default:
-        break;
-    }
+    const copy_form form = copy_form_at(unit, position);
     return {.source = &bytes, .unit = &unit, .form = form, .cards = std::move(options.header)};
 }
 

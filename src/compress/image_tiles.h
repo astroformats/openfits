@@ -39,6 +39,12 @@ enum class tile_algorithm : std::uint8_t
     nocompress,
 };
 
+/// A card under the keyword name, of 8 characters at most: for a card read from a record, the record with the name in
+/// its bytes 1 to 8, its value and comment kept where they are; for a card that a change made, the same value or text
+/// and comment. The headers that a decompression restores, and those that it is written back into, rename their
+/// cards so.
+[[nodiscard]] card renamed_card(const card& original, std::string_view name);
+
 /// The algorithm of a value of ZCMPTYPE, ZCTYPn or ZMASKCMP, without its trailing spaces: the names of Table 36, and
 /// RICE_ONE of old files; nothing for another.
 [[nodiscard]] std::optional<tile_algorithm> algorithm_of(std::string_view name) noexcept;
@@ -142,6 +148,13 @@ struct tile_payload
     double zero = 0.0;
     std::optional<std::int64_t> null{};
 };
+
+/// The payload of the tile at index of image from its row of the table and from the heap of the table, which hold the
+/// bytes of the table in memory, as a read takes them.
+/// @throws invalid_data_error (errc::invalid_descriptor) for a descriptor that points outside the heap, and
+///         integrity_error (errc::corrupt_compressed_data) for a tile that no column holds.
+[[nodiscard]] tile_payload payload_of(const compressed_image& image, std::span<const std::byte> row,
+                                      std::span<const std::byte> heap, std::uint64_t index, std::uint64_t hdu);
 
 /// Decodes the tile at index, counted from 0, of image, whose box has size elements along each axis, from payload into
 /// tile: its stored values, big-endian, as an uncompressed image of ZBITPIX holds them.

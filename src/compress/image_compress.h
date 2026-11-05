@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -30,6 +31,47 @@ struct compressed_unit
     std::vector<card> cards{};
     std::vector<std::byte> data{};
 };
+
+/// What a tile became: the column of its bytes in the heap and the bytes, the elements of its array (bytes, 16-bit
+/// words of PLIO_1, or values of UNCOMPRESSED_DATA), the ZSCALE and ZZERO of a quantized tile, and whether it holds
+/// undefined values.
+struct encoded_tile
+{
+    tile_payload::holder column = tile_payload::holder::compressed;
+    std::vector<std::byte> bytes{};
+    std::uint64_t elements = 0;
+    double scale = 0.0;
+    double zero = 0.0;
+    bool nulls = false;
+};
+
+/// How the tiles of a compressed image are encoded, as its table records it, for tiles encoded again (the editor).
+struct tile_encoding
+{
+    tile_algorithm algorithm = tile_algorithm::rice;
+    /// ZBITPIX.
+    bitpix stored = bitpix::int16;
+    /// BLOCKSIZE of RICE_1.
+    std::size_t block_size = 32;
+    /// The scale of HCOMPRESS_1 as ZVAL1 records it: relative to the noise of each tile when positive.
+    float hcompress_scale = 0.0F;
+    bool quantized = false;
+    quantization method = quantization::no_dither;
+    std::uint32_t seed = 1;
+    bool plio_offset = false;
+    /// BLANK of integer data, whose tiles HCOMPRESS_1 keeps lossless.
+    std::optional<std::int64_t> blank{};
+};
+
+/// Encodes the stored values of a tile again, big-endian as an uncompressed image of its BITPIX holds them: the tile at
+/// index of the box size, of a compressed image whose tiles encoding encodes; a quantized tile at the spacing of its
+/// levels, which its ZSCALE gives, and a tile of a quantized image without one losslessly with GZIP in
+/// GZIP_COMPRESSED_DATA, as it was (standard §10.1.3, §10.2).
+/// @throws validation_error (errc::invalid_compression) for values that the algorithm cannot compress, as
+///         compress_image() does.
+[[nodiscard]] encoded_tile encode_tile_again(const tile_encoding& encoding, std::uint64_t index,
+                                             std::span<const std::uint64_t> size, std::span<const std::byte> stored,
+                                             std::optional<double> spacing, std::uint64_t hdu);
 
 /// The algorithm of options for values of the BITPIX stored: that of compression::automatic resolved, RICE_1 for
 /// integers of up to 32 bits and for quantized floating-point values, GZIP_2 for the others.

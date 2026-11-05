@@ -9,48 +9,49 @@ that does not depend on any application, so that it can replace CFITSIO in C++ p
 [AstroFormats](https://github.com/astroformats), after [OpenXISF](https://github.com/astroformats/openxisf), and
 shares its design.
 
-**Status: 0.4.0.** An early release, which reads and writes headers, images, tables, checksums and tiled compression:
-the primary array and `IMAGE` extensions with every `BITPIX`, their values converted into any numeric type with the
-scaling, undefined values and unsigned conventions of the standard, read whole or as regions with steps, into memory of
-the library or of the application; binary and ASCII tables, every column type and variable-length arrays among them;
-random groups, read; `DATASUM` and `CHECKSUM`, verified as data are read and written on request; and images and tables
-compressed in tiles with every algorithm of the standard, quantization and dithering among them. The writer checks
-every model before it writes, streams the values of images and the rows of tables to the file as they are produced,
-reserves the data of images for later filling, and copies the units of other files byte for byte. Files compressed
-whole with gzip are read and written, and the conformance of a file to the standard is reported in a call, each
-departure with the section of the standard that it departs from. Editing in place comes in a later release, and the
-API may change before 1.0. The ABI holds within a minor version:
-the shared library of each minor version has a soname of its own (`libopenfits.so.0.4` for 0.4.x), and from 0.2 on a
-DLL name of its own on Windows (`openfits-0.4.dll`, `libopenfits-0.4.dll` with MinGW, where 0.1 has `openfits.dll` and
-`libopenfits.dll`), so a program built against 0.3 is rebuilt to use 0.4. The import library keeps its name
-(`openfits.lib`, `libopenfits.dll.a`), so a program links as before. Files are read from, written to and edited through
-sources, sinks and devices of the library or of the application; their header and data units are walked as they are
-asked for, and their headers read as typed values and changed.
+**Status: 0.5.0.** An early release, which reads, writes and edits headers, images, tables, checksums and tiled
+compression: the primary array and `IMAGE` extensions with every `BITPIX`, their values converted into any numeric type
+with the scaling, undefined values and unsigned conventions of the standard, read whole or as regions with steps, into
+memory of the library or of the application; binary and ASCII tables, every column type and variable-length arrays
+among them; random groups, read; `DATASUM` and `CHECKSUM`, verified as data are read and written on request; and images
+and tables compressed in tiles with every algorithm of the standard, quantization and dithering among them. The writer
+checks every model before it writes, streams the values of images and the rows of tables to the file as they are
+produced, reserves the data of images for later filling, and copies the units of other files byte for byte. Files
+compressed whole with gzip are read and written, and the conformance of a file to the standard is reported in a call,
+each departure with the section of the standard that it departs from. Existing files are edited: keywords, values and
+rows changed in place where the layout of the file allows it, and units appended, inserted, replaced and erased, their
+checksums kept up to date from the bytes that change. The API may change before 1.0. The ABI holds within a minor
+version: the shared library of each minor version has a soname of its own (`libopenfits.so.0.5` for 0.5.x), and from
+0.2 on a DLL name of its own on Windows (`openfits-0.5.dll`, `libopenfits-0.5.dll` with MinGW, where 0.1 has
+`openfits.dll` and `libopenfits.dll`), so a program built against 0.4 is rebuilt to use 0.5. The import library keeps
+its name (`openfits.lib`, `libopenfits.dll.a`), so a program links as before. Files are read from, written to and
+edited through sources, sinks and devices of the library or of the application; their header and data units are walked
+as they are asked for, and their headers read as typed values and changed.
 
 ## Features and conformance
 
 | Area | Reading | Writing | Editing |
 |---|---|---|---|
-| Primary array and `IMAGE` extensions, any number of header and data units, every `BITPIX` | Yes | Yes | Planned |
-| Header cards: fixed and free format, strings, logicals, integers, reals, complex and undefined values, commentary, units, display formats, reserved header space | Yes | Yes | Planned |
-| Long strings (`CONTINUE`), `HIERARCH` keywords, `INHERIT` and `LONGSTRN` as keywords | Yes | Yes | Planned |
-| Pixel data: big-endian to native order, `BSCALE`, `BZERO` and `BLANK`, the unsigned conventions, conversion to any numeric type, regions with steps | Yes | Yes: whole images, from memory or streamed, and data reserved for regions | Planned |
-| Binary tables (`BINTABLE`): every column type, repeat counts of 0, dimensions, substrings, scaling, the unsigned conventions, nulls, display formats, variable-length arrays with `P` and `Q` descriptors | Yes | Yes | Planned |
-| ASCII tables (`TABLE`): `A`, `I`, `F`, `E` and `D` fields, null strings, blank fields, implied decimal points | Yes | Yes | Planned |
-| Random groups: parameters, by index and by name, and the array of each group | Yes | Not planned (deprecated by the standard) | Not planned |
-| Checksums (`CHECKSUM` and `DATASUM`): verified in reads of whole images, on request and at a strict open, the header part as units are walked; written on request | Yes | Yes | Planned |
-| Tiled image compression: `RICE_1`, `GZIP_1`, `GZIP_2`, `PLIO_1`, `HCOMPRESS_1` and `NOCOMPRESS`, with quantization and dithering, null pixels and a cache of decoded tiles | Yes | Yes | Planned: keywords in place, regions re-encode the unit |
-| Tiled table compression: `RICE_1`, `GZIP_1`, `GZIP_2` and `NOCOMPRESS` columns, variable-length arrays among them | Yes | Yes | Planned: keywords in place, cells through a rewrite |
-| gzip-compressed files (`.fits.gz`): recognized by their first bytes, every member inflated, into memory or a temporary file | Yes | Yes, on request | Not applicable |
-| Extensions of unknown type, special records | Yes (raw) | Yes: copied unchanged | Planned: copied unchanged |
-| File specifications `file.fits[2]`, `file.fits[SCI,1]`, `file.fits[1][*,1:100]`, parsed when asked for | Yes | Not applicable | Planned: unit selection |
-| WCS and time keywords, read and written as keywords, not evaluated | Yes | Yes | Planned |
+| Primary array and `IMAGE` extensions, any number of header and data units, every `BITPIX` | Yes | Yes | Yes: units appended, inserted, replaced and erased |
+| Header cards: fixed and free format, strings, logicals, integers, reals, complex and undefined values, commentary, units, display formats, reserved header space | Yes | Yes | Yes: in place within the blocks of the header, its blank cards taken first |
+| Long strings (`CONTINUE`), `HIERARCH` keywords, `INHERIT` and `LONGSTRN` as keywords | Yes | Yes | Yes |
+| Pixel data: big-endian to native order, `BSCALE`, `BZERO` and `BLANK`, the unsigned conventions, conversion to any numeric type, regions with steps | Yes | Yes: whole images, from memory or streamed, and data reserved for regions | Yes: regions with steps and a pitch, in place, undefined values and raw bytes |
+| Binary tables (`BINTABLE`): every column type, repeat counts of 0, dimensions, substrings, scaling, the unsigned conventions, nulls, display formats, variable-length arrays with `P` and `Q` descriptors | Yes | Yes | Yes: fields in place, but those of variable-length arrays, and rows appended |
+| ASCII tables (`TABLE`): `A`, `I`, `F`, `E` and `D` fields, null strings, blank fields, implied decimal points | Yes | Yes | Yes: fields in place and rows appended |
+| Random groups: parameters, by index and by name, and the array of each group | Yes | Not planned (deprecated by the standard) | Keywords and raw bytes |
+| Checksums (`CHECKSUM` and `DATASUM`): verified in reads of whole images, on request and at a strict open, the header part as units are walked; written on request | Yes | Yes | Yes: updated from the bytes that change (standard Appendix J.4) |
+| Tiled image compression: `RICE_1`, `GZIP_1`, `GZIP_2`, `PLIO_1`, `HCOMPRESS_1` and `NOCOMPRESS`, with quantization and dithering, null pixels and a cache of decoded tiles | Yes | Yes | Yes: keywords through the `Z` keywords, regions re-encode the tiles they meet |
+| Tiled table compression: `RICE_1`, `GZIP_1`, `GZIP_2` and `NOCOMPRESS` columns, variable-length arrays among them | Yes | Yes | Keywords; cells through a replaced unit |
+| gzip-compressed files (`.fits.gz`): recognized by their first bytes, every member inflated, into memory or a temporary file | Yes | Yes, on request | No: written again whole |
+| Extensions of unknown type, special records | Yes (raw) | Yes: copied unchanged | Yes: kept unchanged, raw bytes |
+| File specifications `file.fits[2]`, `file.fits[SCI,1]`, `file.fits[1][*,1:100]`, parsed when asked for | Yes | Not applicable | Yes: unit selection |
+| WCS and time keywords, read and written as keywords, not evaluated | Yes | Yes | Yes |
 | Verification of a file against the standard, headers and data, each departure reported with its section | Yes | Not applicable | Not applicable |
 
-Editing means changing an existing file in place: keywords, data values, appended rows and units, and a safe rewrite
-for every change of layout. Not planned: evaluating world coordinates (the work of a coordinate library), the filtering
-and calculator syntax of CFITSIO's extended file names, the hierarchical grouping convention, and writing random
-groups. The table is updated at each release.
+Editing means changing an existing file: keywords, data values and rows in place where the layout of the file allows
+it, units added and removed, and a safe rewrite for every change of layout. Not planned: evaluating world coordinates
+(the work of a coordinate library), the filtering and calculator syntax of CFITSIO's extended file names, the
+hierarchical grouping convention, and writing random groups. The table is updated at each release.
 
 ### Tiled compression
 
@@ -293,8 +294,8 @@ written as it is, under the `BSCALE` and `BZERO` of its description, and with `s
 convert into stored ones by a scaling of the caller's instead: codes of `std::uint16_t` with the offset of their type,
 under a scaling of the application's, for instance. `save()` replaces a file only once the new one is
 complete, or refuses to replace one (`if_exists::fail`), and writes into any sink as well: `samples/stream_io.cpp`
-writes through a `std::ofstream`, and reads the file back through a `std::ifstream` and a `FILE*`. The examples of
-editing files arrive with that part of the API.
+writes through a `std::ofstream`, and reads the file back through a `std::ifstream` and a `FILE*`. A file that exists
+is changed through an editor, described below.
 
 `save()` checks the whole model before it writes a byte, and throws `validation_error`, naming the unit and the keyword,
 for what the standard forbids: a keyword name, a value or a comment that no record holds, a structural keyword in a
@@ -461,15 +462,61 @@ The diagnostics of a reader carry the same sections. Their severities say what r
 part of the file unavailable, a `warning` is a departure read as intended, and an `info` a departure that changes
 nothing, a form that the standard deprecates, or a convention outside it.
 
+An `editor` opens a file to change it, from a path, a file specification that selects a unit, or a device, and walks
+every unit, since it needs the whole layout. Its changes are pending until `commit()`, which applies them together: the
+header of a unit, changed as any header, its structural keywords refused; values written into images, region by region,
+and into the fields of tables, converted as a save converts them; rows appended to tables; and units appended,
+inserted, replaced and erased. A commit writes in place what keeps the layout of the file, each write touching only the
+bytes that change: a header that still fits its blocks, the blank cards before `END` taking the cards added, values,
+rows appended to a table without a heap that ends the file, units appended. Any other change rewrites the file through
+a copy that replaces it once complete, so that a failure leaves the old file or the new one, or, for files too large to
+copy, moves the units within the file (`relayout::in_place`), where a failure leaves it damaged;
+`editor_options::atomic` applies every commit through a copy. The `CHECKSUM` and `DATASUM` of a unit that changes are
+updated from the bytes that change alone, as standard Appendix J.4 describes, with no pass over the unit, so that a unit
+that matched them still does. This excerpt of `samples/update_keyword.cpp` sets a keyword, given as the text of its
+value, in the header of the unit that a file specification such as `image.fits[SCI,2]` selects:
+
+```cpp
+openfits::editor file(openfits::file_specification::parse(arguments[0]));
+const std::size_t index = file.selected_hdu();
+openfits::header& cards = file.header(index);  // Valid until the commit.
+openfits::card edited = openfits::card::with_value_text(keyword, value_text, cards.comment(keyword).value_or(""));
+if (const std::optional<std::size_t> position = cards.index_of(keyword)) {
+    (void)cards.erase(keyword);
+    cards.insert(*position, std::move(edited));
+} else {
+    cards.append(std::move(edited));
+}
+cards.add_history("Keywords changed by the sample update_keyword");
+file.commit();
+```
+
+`update_keywords(path, hdu, cards)` sets cards in a header and commits, in one call. An output frame, a stack or a
+mosaic, is written region by region into the zeros of a reserved image, and the rows of a log or a catalogue appended as
+they come:
+
+```cpp
+openfits::editor frame(path);
+frame.write_pixels(0, std::span<const float>(tile), {.region = openfits::region{.start = {x, y}, .size = {512, 512}}});
+frame.append_rows(1, std::vector<openfits::column_values>{std::span(names), std::span(fluxes)});
+frame.commit();
+```
+
+A compressed image is edited as the image it holds: its header through the `Z` keywords of its table, and its values in
+the tiles that the regions written meet, which the commit encodes again, a quantized tile at the spacing of its levels.
+When a commit throws, its changes stay pending, and the next commit applies them again; `discard()` drops them.
+
 ## Thread safety, errors and text
 
 These are the design rules. They take effect as the API arrives.
 
 - **Thread safety.** There is no mutable global state. A `reader` never changes in the eyes of its callers once
-  constructed (the walk of its units is internal and synchronized), so any number of threads can use it. Writers and
-  values are thread-compatible, like standard containers. The file and memory sources can be read from any number of
-  threads at once, and the file and memory devices read and written; the library calls a source that does not declare
-  concurrent reads, or a device that does not declare concurrent writes, from one thread at a time.
+  constructed (the walk of its units is internal and synchronized), so any number of threads can use it. Writers,
+  editors and values are thread-compatible, like standard containers; the reader of an editor can be used by any
+  number of threads between its commits, and another reader of a file that an editor changes is not supported. The
+  file and memory sources can be read from any number of threads at once, and the file and memory devices read and
+  written; the library calls a source that does not declare concurrent reads, or a device that does not declare
+  concurrent writes, from one thread at a time.
 - **Errors.** Failures are exceptions derived from `openfits::error`, one class per kind of failure, each with an error
   code. A problem confined to one header and data unit, such as an unsupported compression, makes that unit
   unavailable and is reported as a diagnostic; the rest of the file stays readable. Harmless departures from the

@@ -53,6 +53,12 @@ struct unit_copy
 /// True for a unit that cannot be the first of a file, nor become its primary HDU: an extension that holds no image.
 [[nodiscard]] bool needs_primary_before(const hdu_info& unit) noexcept;
 
+/// The form that a copy of unit takes at position in a file: a primary HDU of an image after the first unit becomes an
+/// IMAGE extension, and an IMAGE extension first the primary HDU.
+/// @throws usage_error (errc::invalid_argument) for random groups after the first unit, which only a primary HDU holds
+///         (standard §6).
+[[nodiscard]] copy_form copy_form_at(const hdu_info& unit, std::size_t position);
+
 /// The copy of the unit at index of source, which reads bytes, placed at position in the file of the writer.
 /// @throws the errors of writer::add_hdu().
 [[nodiscard]] unit_copy plan_copy(const reader& source, const thread_safe_source& bytes, std::size_t index,

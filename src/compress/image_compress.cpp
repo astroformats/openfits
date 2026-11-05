@@ -115,18 +115,6 @@ std::int64_t tile_scale(float scale, const noise_estimate& noise)
     return static_cast<std::int64_t>(std::trunc(rounded));
 }
 
-// What a tile became: the bytes of its column in the heap, and its row.
-struct encoded_tile
-{
-    tile_payload::holder column = tile_payload::holder::compressed;
-    std::vector<std::byte> bytes{};
-    /// The elements of its array: bytes, or 16-bit words of PLIO_1, or values of UNCOMPRESSED_DATA.
-    std::uint64_t elements = 0;
-    double scale = 0.0;
-    double zero = 0.0;
-    bool nulls = false;
-};
-
 // What every tile of an image needs.
 struct image_plan
 {
@@ -441,10 +429,10 @@ void encode_quantized(const image_plan& plan, double level, std::uint64_t index,
                     encoder, tile);
 }
 
-void encode_tile(const image_plan& plan, std::uint64_t index, std::span<const std::uint64_t> start,
-                 std::span<const std::uint64_t> size, tile_encoder& encoder, encoded_tile& tile)
+// Compresses the stored values of a tile that encoder.stored holds.
+void encode_gathered(const image_plan& plan, std::uint64_t index, std::span<const std::uint64_t> size,
+                     tile_encoder& encoder, encoded_tile& tile)
 {
-    gather(plan, start, size, encoder);
     const std::size_t width = stored_size(plan.stored);
     if (!is_floating(plan.stored)) {
         std::optional<std::int32_t> null;
@@ -475,6 +463,13 @@ void encode_tile(const image_plan& plan, std::uint64_t index, std::span<const st
     }
     gzip_bytes(encoder.stored, width, plan.algorithm == tile_algorithm::gzip_2, encoder, tile.bytes);
     tile.elements = tile.bytes.size();
+}
+
+void encode_tile(const image_plan& plan, std::uint64_t index, std::span<const std::uint64_t> start,
+                 std::span<const std::uint64_t> size, tile_encoder& encoder, encoded_tile& tile)
+{
+    gather(plan, start, size, encoder);
+    encode_gathered(plan, index, size, encoder, tile);
 }
 
 // The seed of the dithering taken from the values of the first tile, as CFITSIO takes it.
@@ -935,6 +930,44 @@ compressed_unit compress_image(const image_info& image, const write_conversion& 
         cards.emplace_back("EXTNAME", "COMPRESSED_IMAGE", "name of this binary table extension");
     }
     return unit;
+}
+
+encoded_tile encode_tile_again(const tile_encoding& encoding, std::uint64_t index, std::span<const std::uint64_t> size,
+                               std::span<const std::byte> stored, std::optional<double> spacing, std::uint64_t hdu)
+{
+    image_info image;
+    image.bitpix = encoding.stored;
+    image.blank = encoding.blank;
+    compression_options options;
+    options.rice_block_size = static_cast<std::uint32_t>(encoding.block_size);
+    options.quantize_method = encoding.method;
+    // The spacing of the levels of the tile as it was, which a negative level gives as it is.
+    if (spacing) {
+        options.quantize_level = -*spacing;
+    }
+    const write_conversion conversion{};
+    const image_plan plan{.image = image,
+                          .conversion = conversion,
+                          .options = options,
+                          .algorithm = encoding.algorithm,
+                          .stored = encoding.stored,
+                          .quantized = encoding.quantized && spacing.has_value(),
+                          .seed = encoding.seed,
+                          .plio_offset = encoding.plio_offset,
+                          .hcompress_scale = encoding.hcompress_scale,
+                          .hdu = hdu};
+    tile_encoder encoder(-1);
+    encoder.stored.assign(stored.begin(), stored.end());
+    encoded_tile tile;
+    if (encoding.quantized && !spacing) {
+        // A tile that was not quantized stays lossless, in GZIP_COMPRESSED_DATA (standard §10.1.3).
+        tile.column = tile_payload::holder::gzip_compressed;
+        encoder.gzip.compress(encoder.stored, tile.bytes);
+        tile.elements = tile.bytes.size();
+        return tile;
+    }
+    encode_gathered(plan, index, size, encoder, tile);
+    return tile;
 }
 
 } // namespace openfits::detail
