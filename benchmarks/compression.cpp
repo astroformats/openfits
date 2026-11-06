@@ -138,6 +138,35 @@ void read_rows(benchmark::State& state, packed_kind kind, frame_size size, bool 
     count_bytes(state, size.pixels() * 2);
 }
 
+// A hundred regions of 64 x 64 pixels read from the image, at places spread over it as a viewer or a program that
+// samples an image reads them, through a tile cache or not: each region decodes the tiles that it meets, which a
+// cache keeps for the regions after it.
+void read_regions(benchmark::State& state, packed_kind kind, frame_size size, bool cached)
+{
+    const reader file(file_of(kind, size));
+    constexpr std::uint64_t side = 64;
+    std::vector<std::uint16_t> values(side * side);
+    std::vector<region> boxes;
+    std::uint64_t seed = 1;
+    for (int i = 0; i < 100; ++i) {
+        seed = (seed * 6364136223846793005U) + 1442695040888963407U;
+        const std::uint64_t x = (seed >> 33U) % (size.width - side);
+        const std::uint64_t y = (seed >> 13U) % (size.height - side);
+        boxes.push_back(region{.start = {x, y}, .size = {side, side}});
+    }
+    while (state.KeepRunning()) {
+        // A cache of each pass, so that each pass decodes each tile once at most.
+        tile_cache cache(std::uint64_t{16} << 20);
+        for (const region& box : boxes) {
+            (void)file.read_pixels(1, std::span<std::uint16_t>(values),
+                                   {.region = box, .cache = cached ? &cache : nullptr});
+            benchmark::DoNotOptimize(values.data());
+        }
+        benchmark::ClobberMemory();
+    }
+    count_bytes(state, 100 * side * side * 2);
+}
+
 // The compression of the image and its save, into a sink that keeps no bytes.
 void write_packed(benchmark::State& state, packed_kind kind, frame_size size)
 {
@@ -174,6 +203,11 @@ void register_compression_benchmarks()
         benchmark::RegisterBenchmark("read/u16_rice_band/rows" + suffix, read_rows, kinds[1], size, false)
             ->Unit(benchmark::kMillisecond);
         benchmark::RegisterBenchmark("read/u16_rice_band/rows_cached" + suffix, read_rows, kinds[1], size, true)
+            ->Unit(benchmark::kMillisecond);
+        benchmark::RegisterBenchmark("read/u16_rice_band/regions_100" + suffix, read_regions, kinds[1], size, false)
+            ->Unit(benchmark::kMillisecond);
+        benchmark::RegisterBenchmark("read/u16_rice_band/regions_100_cached" + suffix, read_regions, kinds[1], size,
+                                     true)
             ->Unit(benchmark::kMillisecond);
     }
 }

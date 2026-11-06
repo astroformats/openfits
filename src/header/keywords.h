@@ -12,6 +12,11 @@
 
 namespace openfits::detail {
 
+/// The first eight bytes of keyword, which hold every keyword of the standard, as an integer, a shorter keyword
+/// completed with zeros: with the size of a keyword, a key that tells keywords apart without a read of their bytes, but
+/// for those longer than eight bytes, which share the prefix of their first eight.
+[[nodiscard]] std::uint64_t keyword_prefix(std::string_view keyword) noexcept;
+
 /// The index n of an indexed keyword root + n: a positive integer without leading zeros (standard §4.1.2.1), at most
 /// 999, which every index of the standard is. Nothing when name is not of that form.
 [[nodiscard]] std::optional<std::uint32_t> keyword_index(std::string_view name, std::string_view root) noexcept;

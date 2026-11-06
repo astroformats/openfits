@@ -291,8 +291,14 @@ private:
                 lengths.push_back(static_cast<std::uint64_t>(*length));
             }
         }
-        for (const std::size_t i : cards_.matching("NAXIS#")) {
-            const std::optional<std::uint32_t> n = keyword_index(cards_[i].keyword(), "NAXIS");
+        // NAXISn beyond NAXIS, the index of one to three digits that keyword_index() reads, without the match of a
+        // pattern for each card.
+        for (std::size_t i = 0; i < cards_.size(); ++i) {
+            const std::string_view keyword = cards_[i].keyword();
+            if (keyword.size() < 6 || keyword.size() > 8 || !keyword.starts_with("NAXIS")) {
+                continue;
+            }
+            const std::optional<std::uint32_t> n = keyword_index(keyword, "NAXIS");
             if (n && *n > *result.naxis && cards_[i].has_value_indicator()) {
                 log_.warning(errc::invalid_structure, "4.4.1.1",
                              "NAXIS is " + std::to_string(*result.naxis) + ", and " + name_at(i) + " is ignored",
@@ -484,12 +490,22 @@ private:
                            kind == hdu_kind::compressed_image;
         for (std::size_t i = 0; i < cards_.size(); ++i) {
             const card& value = cards_[i];
-            const value_kind held = value.value().kind();
-            if (!value.has_value_indicator() || held == value_kind::undefined || held == value_kind::none) {
+            if (!value.has_value_indicator()) {
                 continue;
             }
+            // The keyword first, which leaves the values of the keywords that the standard does not reserve unread.
             const std::string_view keyword = value.keyword();
-            if (keyword == "BSCALE" || keyword == "BZERO") {
+            const bool scaling = keyword == "BSCALE" || keyword == "BZERO";
+            const bool other = keyword == "BLANK" || keyword == "EXTEND";
+            const std::optional<value_class> expected = scaling || other ? std::nullopt : reserved_value_class(keyword);
+            if (!scaling && !other && !expected) {
+                continue;
+            }
+            const value_kind held = value.value().kind();
+            if (held == value_kind::undefined || held == value_kind::none) {
+                continue;
+            }
+            if (scaling) {
                 if (array) {
                     check_bscale(i);
                 }
@@ -501,7 +517,7 @@ private:
                 if (index_ == 0) {
                     check_class(i, value_class::logical);
                 }
-            } else if (const std::optional<value_class> expected = reserved_value_class(keyword)) {
+            } else if (expected) {
                 check_class(i, *expected);
             }
         }

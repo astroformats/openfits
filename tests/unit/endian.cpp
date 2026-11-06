@@ -9,7 +9,10 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <ostream>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace {
@@ -17,9 +20,13 @@ namespace {
 using openfits::detail::byte_swap;
 using openfits::detail::convert_big_endian;
 using openfits::detail::copy_big_endian;
+using openfits::detail::has_baseline_kernels;
 using openfits::detail::load_big_endian;
+using openfits::detail::processor_has_avx2;
+using openfits::detail::simd_kernel;
 using openfits::detail::store_big_endian;
 using openfits::detail::swap_byte_order;
+using openfits::detail::swap_items;
 
 // The bytes 0, 1, 2, ..., count - 1.
 std::vector<std::byte> sequence(std::size_t count)
@@ -120,6 +127,77 @@ TEST_P(item_sizes, copy_converts_without_modifying_the_source)
 }
 
 INSTANTIATE_TEST_SUITE_P(endian, item_sizes, testing::Values(2, 4, 8));
+
+// The SIMD kernels give the bytes of the scalar code for every item size, with and without a mask, from data of every
+// length up to some registers of each kind, so that each kernel ends with every tail its registers leave: whole
+// registers of 16 and 32 bytes, four of them a turn, then the items left, then the bytes after the last item.
+struct kernel_case
+{
+    simd_kernel kernel = simd_kernel::baseline;
+    const char* name = "";
+};
+
+// The name of the kernel, which CTest names the test after.
+// NOLINTNEXTLINE(readability-identifier-naming)
+void PrintTo(const kernel_case& value, std::ostream* output)
+{
+    *output << value.name;
+}
+
+class swap_kernels : public testing::TestWithParam<kernel_case>
+{};
+
+TEST_P(swap_kernels, give_the_bytes_of_the_scalar_code_for_every_length)
+{
+    const simd_kernel kernel = GetParam().kernel;
+    if (!has_baseline_kernels() || (kernel == simd_kernel::best && !processor_has_avx2())) {
+        GTEST_SKIP() << "the kernel falls back to another one on this processor or in this build";
+    }
+    for (const std::size_t item_size : {2U, 4U, 8U}) {
+        // The sign bit of a value converted from big-endian to native order and back, as conversions flip it.
+        const std::uint64_t sign = std::uint64_t{1} << ((8 * item_size) - 1);
+        for (const std::uint64_t mask : {std::uint64_t{0}, sign, byte_swap(sign) >> (64 - (8 * item_size))}) {
+            for (std::size_t length = 0; length <= 300; ++length) {
+                const std::vector<std::byte> source = sequence(length);
+                std::vector<std::byte> expected(length);
+                swap_items(source, expected, item_size, mask, simd_kernel::scalar);
+                std::vector<std::byte> copied(length);
+                swap_items(source, copied, item_size, mask, kernel);
+                EXPECT_EQ(copied, expected) << item_size << " bytes, mask " << mask << ", length " << length;
+                std::vector<std::byte> in_place = source;
+                swap_items(in_place, in_place, item_size, mask, kernel);
+                EXPECT_EQ(in_place, expected) << item_size << " bytes, mask " << mask << ", length " << length;
+            }
+        }
+    }
+}
+
+// The scalar code reverses each item and then flips the bits of the mask, as an integer of the host.
+TEST(endian, swap_items_flips_the_bits_of_the_mask_after_the_swap)
+{
+    const std::vector<std::byte> source = sequence(9);
+    std::vector<std::byte> target(9);
+    swap_items(source, target, 4, 0x80000000U, simd_kernel::scalar);
+
+    std::vector<std::byte> expected = swapped_sequence(9, 4);
+    for (const std::size_t item : {0U, 4U}) {
+        std::uint32_t value = 0;
+        std::memcpy(&value, expected.data() + item, 4);
+        value ^= 0x80000000U;
+        std::memcpy(expected.data() + item, &value, 4);
+    }
+    EXPECT_EQ(target, expected);
+}
+
+std::string kernel_name(const testing::TestParamInfo<kernel_case>& instance)
+{
+    return instance.param.name;
+}
+
+INSTANTIATE_TEST_SUITE_P(endian, swap_kernels,
+                         testing::Values(kernel_case{.kernel = simd_kernel::baseline, .name = "baseline"},
+                                         kernel_case{.kernel = simd_kernel::best, .name = "best"}),
+                         kernel_name);
 
 // One-byte items, the bytes of BITPIX 8, have no byte order; neither has an item size the format does not use.
 TEST(endian, other_item_sizes_and_empty_data_are_left_alone)

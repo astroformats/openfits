@@ -70,32 +70,6 @@ card_value::card_value(std::string value) noexcept : value_(std::in_place_type<s
 card_value::card_value(std::string_view value) : value_(std::in_place_type<std::string>, value) {}
 card_value::card_value(const char* value) : value_(std::in_place_type<std::string>, value) {}
 
-value_kind card_value::kind() const noexcept
-{
-    // The alternatives of storage, in their order. The variant is never valueless: the copy of an alternative is made
-    // before it replaces the old one, and every alternative moves without throwing.
-    static_assert(std::variant_size_v<storage> == 9);
-    switch (value_.index()) {
-    case 0:
-        return value_kind::none;
-    case 1:
-        return value_kind::undefined;
-    case 2:
-        return value_kind::logical;
-    case 3:
-    case 4:
-        return value_kind::integer;
-    case 5:
-        return value_kind::real;
-    case 6:
-        return value_kind::complex_integer;
-    case 7:
-        return value_kind::complex_real;
-    default:
-        return value_kind::string;
-    }
-}
-
 void card_value::throw_type_mismatch()
 {
     throw usage_error(errc::invalid_argument, "the value of the keyword is not held in the type asked for");

@@ -29,6 +29,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -58,6 +59,109 @@ constexpr std::uint64_t height = 23;
 reader open(const std::vector<std::byte>& file)
 {
     return reader(std::make_unique<openfits::memory_source>(std::vector<std::byte>(file)));
+}
+
+// The file of a PLIO_1 image of values with the scaling of info, its ZBITPIX given the value field, right-justified in
+// its 20 columns: the lists then hold values that the stored type of the new ZBITPIX may not. Not recorded for
+// other readers, some of which subtract no offset of BZERO from the values of PLIO_1 lists.
+template <typename T>
+std::vector<std::byte> plio_file_with_zbitpix(image_info info, const std::vector<T>& values, std::string_view field)
+{
+    writer output;
+    output.add_image(std::move(info), std::span(values),
+                     {.compression = compression_options{.type = compression::plio}});
+    openfits::memory_sink sink;
+    output.save(sink);
+    std::vector<std::byte> file = sink.release();
+    // The algorithms of iterators: Clang 15 cannot instantiate the ranges of these spans with libstdc++ 11 and 12.
+    // NOLINTBEGIN(modernize-use-ranges)
+    const std::string_view keyword = "ZBITPIX = ";
+    const std::span<const std::byte> pattern = std::as_bytes(std::span(keyword));
+    const auto at = std::search(file.begin(), file.end(), pattern.begin(), pattern.end());
+    EXPECT_NE(at, file.end());
+    if (at == file.end()) {
+        return file;
+    }
+    const std::string padded = std::string(20 - field.size(), ' ') + std::string(field);
+    const std::span<const std::byte> replacement = std::as_bytes(std::span(padded));
+    std::copy(replacement.begin(), replacement.end(), at + static_cast<std::ptrdiff_t>(keyword.size()));
+    // NOLINTEND(modernize-use-ranges)
+    return file;
+}
+
+// A PLIO_1 list holds values from 0 to 2^24 - 1: the tile of an image whose values lie beyond its BITPIX is corrupt,
+// which the decode of the stored values checks as that of each algorithm does. The file is an image of 16-bit values
+// of 1000 with its ZBITPIX made 8.
+TEST(compressed_image, refuses_a_plio_tile_whose_values_lie_beyond_its_bitpix)
+{
+    image_info info;
+    info.geometry.axes = {8, 8};
+    const reader input = open(plio_file_with_zbitpix(info, std::vector<std::int16_t>(64, 1000), "8"));
+    EXPECT_TRUE(throws<openfits::integrity_error>(errc::corrupt_compressed_data,
+                                                  [&] { (void)input.read_pixels<std::uint8_t>(1); }));
+}
+
+// A tile is checked whole, a value beyond the stored type found wherever it lies: a tile of 1000 values, each of 7 but
+// one of 1000 at the first, the last, or on either side of 512 values, with ZBITPIX made 8.
+TEST(compressed_image, refuses_a_plio_value_beyond_its_bitpix_anywhere_in_its_tile)
+{
+    image_info info;
+    info.geometry.axes = {1000};
+    const reader valid = open(plio_file_with_zbitpix(info, std::vector<std::int16_t>(1000, 7), "8"));
+    EXPECT_EQ(valid.read_pixels<std::uint8_t>(1), std::vector<std::uint8_t>(1000, 7));
+    for (const std::size_t position :
+         {std::size_t{0}, std::size_t{511}, std::size_t{512}, std::size_t{700}, std::size_t{999}}) {
+        std::vector<std::int16_t> values(1000, 7);
+        values[position] = 1000;
+        const reader input = open(plio_file_with_zbitpix(info, values, "8"));
+        EXPECT_TRUE(throws<openfits::integrity_error>(errc::corrupt_compressed_data,
+                                                      [&] { (void)input.read_pixels<std::uint8_t>(1); }))
+            << "the value at " << position;
+    }
+}
+
+// The lists of an image of 16-bit integers whose BZERO is 32768 hold the stored values plus 32768, from 0 to 65535:
+// those values read as their extremes, and one of 70000 is beyond. The file is an image of 32-bit integers with that
+// BZERO, its ZBITPIX made 16.
+TEST(compressed_image, checks_the_plio_values_of_16_bit_integers_with_the_offset_of_bzero)
+{
+    image_info info;
+    info.geometry.axes = {1000};
+    info.bitpix = bitpix::int32;
+    info.scaling.zero = 32768.0;
+    std::vector<std::int32_t> values(1000, 100);
+    values[0] = 0;
+    values[999] = 65535;
+    const reader valid = open(plio_file_with_zbitpix(info, values, "16"));
+    const std::vector<std::uint16_t> read = valid.read_pixels<std::uint16_t>(1);
+    ASSERT_EQ(read.size(), 1000U);
+    EXPECT_EQ(read[0], 0);
+    EXPECT_EQ(read[500], 100);
+    EXPECT_EQ(read[999], 65535);
+    values[700] = 70000;
+    const reader beyond = open(plio_file_with_zbitpix(info, values, "16"));
+    EXPECT_TRUE(throws<openfits::integrity_error>(errc::corrupt_compressed_data,
+                                                  [&] { (void)beyond.read_pixels<std::uint16_t>(1); }));
+}
+
+// Bytes whose BZERO is 32768 go into PLIO_1 lists as their physical values, from 32768 to 33023, and come back. Not
+// recorded for other readers, some of which subtract no offset from the values of the lists.
+TEST(compressed_image, round_trips_plio_bytes_with_the_offset_of_bzero)
+{
+    image_info info;
+    info.geometry.axes = {1000};
+    info.bitpix = bitpix::uint8;
+    info.scaling.zero = 32768.0;
+    std::vector<std::uint16_t> values(1000);
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        values[i] = static_cast<std::uint16_t>(32768 + (i % 256));
+    }
+    writer output;
+    output.add_image(info, std::span(values), {.compression = compression_options{.type = compression::plio}});
+    openfits::memory_sink sink;
+    output.save(sink);
+    const reader input = open(sink.release());
+    EXPECT_EQ(input.read_pixels<std::uint16_t>(1), values);
 }
 
 image_info image_of(std::vector<std::uint64_t> axes)

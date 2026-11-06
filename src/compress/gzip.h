@@ -30,6 +30,11 @@ inline constexpr std::size_t deflate_max_expansion = 1032;
 void gzip_decompress(std::span<const std::byte> input, std::span<std::byte> output,
                      std::size_t max_piece = zlib_max_piece);
 
+/// The level of zlib of GZIP_1 and GZIP_2 tiles and of the column chunks of compressed tables when the options give
+/// none: 1, the fastest, which fpack and CFITSIO write. The default of zlib, 6, took 1.3 to 6 times their time to
+/// encode tiles of 16 rows and of 256 x 256 pixels, for files a few percent smaller.
+inline constexpr int default_tile_level = 1;
+
 /// Compresses inputs one after another into gzip streams at a level of zlib, from 1 to 9 or -1 for its default, with
 /// one deflate state, which deflateReset() makes that of a new stream for each. The gzip header of each stream is the
 /// same on every host: no name, no time, and the operating system unknown (255), so that a file is reproducible.

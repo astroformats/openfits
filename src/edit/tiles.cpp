@@ -12,6 +12,7 @@
 #include "compress/tile_grid.h"
 #include "core/checked_math.h"
 #include "core/endian.h"
+#include "core/parallel.h"
 #include "data/conversion.h"
 #include "table/table_description.h"
 
@@ -22,6 +23,7 @@
 #include <optional>
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace openfits::detail {
 
@@ -279,51 +281,75 @@ recompressed_image recompress_image(const thread_safe_source& source, const hdu_
                                  .plio_offset = image.plio_offset,
                                  .blank = image.image.blank};
     const std::vector<bool> changed = changed_tiles(grid, writes, width);
-    std::map<std::uint64_t, encoded_tile> encoded;
-    std::vector<std::byte> values;
-    std::vector<std::byte> restored;
-    std::vector<std::uint64_t> start(grid.axes().size());
-    std::vector<std::uint64_t> size(grid.axes().size());
-    bool nulls = false;
+    std::vector<std::uint64_t> tiles;
     for (std::uint64_t t = 0; t < grid.count(); ++t) {
-        if (!changed[checked_cast<std::size_t>(t)]) {
-            continue;
+        if (changed[checked_cast<std::size_t>(t)]) {
+            tiles.push_back(t);
         }
-        grid.box(t, start, size);
-        const tile_payload old = payload_of(image, row_of(t), heap, t, hdu);
-        values.resize(checked_cast<std::size_t>(grid.elements(t) * width));
-        decode_tile(image, t, size, old, values);
-        for_each_tile_row(grid, t, width, [&](std::uint64_t offset, std::uint64_t at, std::uint64_t length) {
-            const std::span<std::byte> row =
-                std::span(values).subspan(checked_cast<std::size_t>(at), checked_cast<std::size_t>(length));
-            result.change.before = add_sums(result.change.before, sum_at(row, offset));
-            writes.apply(offset, row);
-        });
-        const std::optional<double> spacing =
-            image.quantized && old.column == tile_payload::holder::compressed ? std::optional(old.scale) : std::nullopt;
-        encoded_tile fresh = encode_tile_again(encoding, t, size, values, spacing, hdu);
-        if (fresh.nulls && !image.nulls && image.null && *image.null != quantized_null) {
-            refuse(hdu, "a tile of the compressed image of unit " + std::to_string(hdu) +
-                            " quantized again holds undefined values, which its ZBLANK, " +
-                            std::to_string(*image.null) + ", does not code as the library codes them");
+    }
+    // A tile encoded again, and the sums of its values before and after, which combine in any order.
+    struct tile_change
+    {
+        encoded_tile fresh{};
+        std::uint32_t before = 0;
+        std::uint32_t after = 0;
+    };
+    std::vector<tile_change> changes(tiles.size());
+    // Each worker decodes, changes and encodes again its share of the tiles, as a save encodes its tiles, with memory
+    // of its own; the decoders and encoders, the overlay and the image are only read.
+    const std::size_t share = std::min(concurrency(), tiles.size());
+    parallel_for(share, [&](std::size_t worker) {
+        std::vector<std::byte> values;
+        std::vector<std::byte> restored;
+        std::vector<std::uint64_t> start(grid.axes().size());
+        std::vector<std::uint64_t> size(grid.axes().size());
+        for (std::size_t i = worker; i < tiles.size(); i += share) {
+            const std::uint64_t t = tiles[i];
+            tile_change& change = changes[i];
+            grid.box(t, start, size);
+            const tile_payload old = payload_of(image, row_of(t), heap, t, hdu);
+            values.resize(checked_cast<std::size_t>(grid.elements(t) * width));
+            decode_tile(image, t, size, old, values);
+            for_each_tile_row(grid, t, width, [&](std::uint64_t offset, std::uint64_t at, std::uint64_t length) {
+                const std::span<std::byte> row =
+                    std::span(values).subspan(checked_cast<std::size_t>(at), checked_cast<std::size_t>(length));
+                change.before = add_sums(change.before, sum_at(row, offset));
+                writes.apply(offset, row);
+            });
+            const std::optional<double> spacing = image.quantized && old.column == tile_payload::holder::compressed
+                                                      ? std::optional(old.scale)
+                                                      : std::nullopt;
+            change.fresh = encode_tile_again(encoding, t, size, values, spacing, hdu);
+            const encoded_tile& fresh = change.fresh;
+            if (fresh.nulls && !image.nulls && image.null && *image.null != quantized_null) {
+                refuse(hdu, "a tile of the compressed image of unit " + std::to_string(hdu) +
+                                " quantized again holds undefined values, which its ZBLANK, " +
+                                std::to_string(*image.null) + ", does not code as the library codes them");
+            }
+            // The values that the tile gives once encoded again, lossy or not, which a read decodes.
+            const tile_payload again{.column = fresh.column,
+                                     .bytes = fresh.bytes,
+                                     .uncompressed_type = column_of(stored),
+                                     .scale = fresh.scale,
+                                     .zero = fresh.zero,
+                                     .null = fresh.nulls ? std::optional<std::int64_t>(quantized_null) : old.null};
+            restored.resize(values.size());
+            decode_tile(image, t, size, again, restored);
+            for_each_tile_row(grid, t, width, [&](std::uint64_t offset, std::uint64_t at, std::uint64_t length) {
+                change.after =
+                    add_sums(change.after, sum_at(std::span(restored).subspan(checked_cast<std::size_t>(at),
+                                                                              checked_cast<std::size_t>(length)),
+                                                  offset));
+            });
         }
-        nulls = nulls || fresh.nulls;
-        // The values that the tile gives once encoded again, lossy or not, which a read decodes.
-        const tile_payload again{.column = fresh.column,
-                                 .bytes = fresh.bytes,
-                                 .uncompressed_type = column_of(stored),
-                                 .scale = fresh.scale,
-                                 .zero = fresh.zero,
-                                 .null = fresh.nulls ? std::optional<std::int64_t>(quantized_null) : old.null};
-        restored.resize(values.size());
-        decode_tile(image, t, size, again, restored);
-        for_each_tile_row(grid, t, width, [&](std::uint64_t offset, std::uint64_t at, std::uint64_t length) {
-            result.change.after = add_sums(
-                result.change.after,
-                sum_at(std::span(restored).subspan(checked_cast<std::size_t>(at), checked_cast<std::size_t>(length)),
-                       offset));
-        });
-        encoded.emplace(t, std::move(fresh));
+    });
+    std::map<std::uint64_t, encoded_tile> encoded;
+    bool nulls = false;
+    for (std::size_t i = 0; i < tiles.size(); ++i) {
+        result.change.before = add_sums(result.change.before, changes[i].before);
+        result.change.after = add_sums(result.change.after, changes[i].after);
+        nulls = nulls || changes[i].fresh.nulls;
+        encoded.emplace(tiles[i], std::move(changes[i].fresh));
     }
 
     // The columns of the table built again: those it has, and those that the tiles encoded again need.

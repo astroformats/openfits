@@ -92,6 +92,31 @@ TEST(shuffle, unshuffles_every_value_size_and_length)
     }
 }
 
+// The SIMD kernels move 16 values a register, and the gather of the shuffle stops where a load would leave the input:
+// lengths up to some registers of values of each size end with every tail, and both directions give the bytes of the
+// scalar code.
+TEST(shuffle, the_simd_kernels_give_the_bytes_of_the_scalar_code)
+{
+    if (!openfits::detail::has_baseline_kernels()) {
+        GTEST_SKIP() << "the build has no SIMD kernels";
+    }
+    using openfits::detail::simd_kernel;
+    for (const std::size_t size : {2U, 4U, 8U}) {
+        for (std::size_t length = 0; length <= (40 * size) + 7; ++length) {
+            const std::vector<std::byte> values = sample_bytes(length, (size * 1000) + length);
+            std::vector<std::byte> expected(length);
+            std::vector<std::byte> shuffled(length);
+            openfits::detail::shuffle_bytes(values, expected, size, simd_kernel::scalar);
+            openfits::detail::shuffle_bytes(values, shuffled, size, simd_kernel::best);
+            ASSERT_EQ(shuffled, expected) << size << " " << length;
+            std::vector<std::byte> restored(length);
+            openfits::detail::unshuffle_bytes(values, expected, size, simd_kernel::scalar);
+            openfits::detail::unshuffle_bytes(values, restored, size, simd_kernel::best);
+            ASSERT_EQ(restored, expected) << size << " " << length;
+        }
+    }
+}
+
 TEST(gzip_tiles, round_trips_at_every_level_and_size)
 {
     for (const std::size_t size : {0U, 1U, 100U, 70'000U}) {

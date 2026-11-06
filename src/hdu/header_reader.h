@@ -4,6 +4,7 @@
 #pragma once
 
 #include <openfits/card.h>
+#include <openfits/header.h>
 #include <openfits/limits.h>
 
 #include "core/diagnostic_log.h"
@@ -89,5 +90,11 @@ private:
 [[nodiscard]] unit_header read_header(const thread_safe_source& source, std::uint64_t offset, std::uint64_t hdu,
                                       std::string_view first_keyword, const limits& limits, diagnostic_log& log,
                                       read_window& window);
+
+/// Records to log a warning for each card with a value whose keyword has a value in an earlier card (standard
+/// §4.1.2.3), in the order of the cards, of the header of the unit hdu read at offset: the cards that read_header()
+/// gives, made a header.
+/// @throws the exceptions of log in strict mode.
+void check_repeated_keywords(const header& cards, std::uint64_t offset, std::uint64_t hdu, diagnostic_log& log);
 
 } // namespace openfits::detail

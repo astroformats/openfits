@@ -24,10 +24,29 @@ inline constexpr std::size_t record_length = 80;
 /// Access to the members of a card that the reader sets and the writer reads.
 struct card_access
 {
-    /// A card read from a record.
-    [[nodiscard]] static card make(std::string keyword, card_value value, std::string comment, std::string text,
+    /// A card read from a record, of record_length bytes, which a shorter one completes with spaces.
+    [[nodiscard]] static card make(std::string keyword, card_value value, std::string comment, std::string_view record,
                                    std::size_t value_begin, std::size_t value_end, bool value_indicator,
                                    bool fixed_format);
+
+    /// Makes target the card that make() makes of the same arguments, in its place.
+    static void set(card& target, std::string keyword, card_value value, std::string comment, std::string_view record,
+                    std::size_t value_begin, std::size_t value_end, bool value_indicator, bool fixed_format);
+
+    /// set() but for the value and the comment, which the reader of the record writes in their place, through
+    /// value_of() and comment_of().
+    static void set_record(card& target, std::string keyword, std::string_view record, std::size_t value_begin,
+                           std::size_t value_end, bool value_indicator, bool fixed_format);
+
+    [[nodiscard]] static card_value& value_of(card& target) noexcept
+    {
+        return target.value_;
+    }
+
+    [[nodiscard]] static std::string& comment_of(card& target) noexcept
+    {
+        return target.comment_;
+    }
 
     /// The value of a card read from a record is in the fixed format of its kind (standard §4.2), which the values of
     /// mandatory keywords must be.
@@ -40,6 +59,9 @@ struct card_access
 /// Reads a keyword record of exactly record_length bytes, as card::parse() describes. Each departure from the standard
 /// is appended to departures, with the keyword in its context.
 [[nodiscard]] card parse_record(std::string_view record, std::vector<diagnostic>& departures);
+
+/// parse_record() into the card into, in its place: a reader makes the cards of a header in the vector that keeps them.
+void parse_record_into(std::string_view record, std::vector<diagnostic>& departures, card& into);
 
 /// What a record does with the bytes outside printable ASCII of its strings, comments and texts, which standard
 /// §4.1.2.3 does not allow in a header.

@@ -7,6 +7,7 @@
 #include "core/ascii.h"
 #include "core/endian.h"
 #include "core/quote.h"
+#include "core/scratch_buffer.h"
 #include "hdu/copy.h"
 #include "hdu/header_reader.h"
 #include "io/thread_safe_source.h"
@@ -35,7 +36,7 @@ namespace {
 // A problem that repeats is listed this many times, and the next finding of it counts the others.
 constexpr std::uint64_t listed_repeats = 10;
 // The bytes of rows read at a time, and of a field read at a time when its rows are larger.
-constexpr std::uint64_t data_chunk = std::uint64_t{4} << 20;
+constexpr std::uint64_t data_chunk = detail::staging_size;
 
 // The findings of a report, those of a problem that repeats listed up to listed_repeats times.
 class report

@@ -145,6 +145,8 @@ TEST_P(tile_gather, gathers_the_region_from_its_tiles)
     std::vector<int> writes(span, 0);
     std::vector<std::uint64_t> start(parameter.axes.size());
     std::vector<std::uint64_t> size(parameter.axes.size());
+    // The memory of the runs, kept from one tile to the next as the reads keep it.
+    openfits::detail::tile_run_buffers buffers;
     for (const std::uint64_t index : grid.tiles_of(selection)) {
         grid.box(index, start, size);
         std::vector<std::uint64_t> tile(grid.elements(index));
@@ -161,7 +163,7 @@ TEST_P(tile_gather, gathers_the_region_from_its_tiles)
                 local[a] = 0;
             }
         }
-        openfits::detail::for_each_tile_run(selection, start, size, parameter.pitch, [&](const tile_run& run) {
+        openfits::detail::for_each_tile_run(selection, start, size, parameter.pitch, buffers, [&](const tile_run& run) {
             for (std::uint64_t i = 0; i < run.count; ++i) {
                 const std::int64_t at =
                     static_cast<std::int64_t>(run.first) + (static_cast<std::int64_t>(i) * run.step);
