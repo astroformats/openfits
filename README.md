@@ -9,7 +9,7 @@ that does not depend on any application, so that it can replace CFITSIO in C++ p
 [AstroFormats](https://github.com/astroformats), after [OpenXISF](https://github.com/astroformats/openxisf), and
 shares its design.
 
-**Status: 0.5.0.** An early release, which reads, writes and edits headers, images, tables, checksums and tiled
+**Status: 0.6.0.** An early release, which reads, writes and edits headers, images, tables, checksums and tiled
 compression: the primary array and `IMAGE` extensions with every `BITPIX`, their values converted into any numeric type
 with the scaling, undefined values and unsigned conventions of the standard, read whole or as regions with steps, into
 memory of the library or of the application; binary and ASCII tables, every column type and variable-length arrays
@@ -20,10 +20,12 @@ produced, reserves the data of images for later filling, and copies the units of
 compressed whole with gzip are read and written, and the conformance of a file to the standard is reported in a call,
 each departure with the section of the standard that it departs from. Existing files are edited: keywords, values and
 rows changed in place where the layout of the file allows it, and units appended, inserted, replaced and erased, their
-checksums kept up to date from the bytes that change. The API may change before 1.0. The ABI holds within a minor
-version: the shared library of each minor version has a soname of its own (`libopenfits.so.0.5` for 0.5.x), and from
-0.2 on a DLL name of its own on Windows (`openfits-0.5.dll`, `libopenfits-0.5.dll` with MinGW, where 0.1 has
-`openfits.dll` and `libopenfits.dll`), so a program built against 0.4 is rebuilt to use 0.5. The import library keeps
+checksums kept up to date from the bytes that change. On x86-64 the bytes of values are swapped, shuffled and summed
+by SSE2 kernels, and by AVX2 ones on the processors that have it, chosen at run time; a file is read by any number of
+threads at once on every system. The API may change before 1.0. The ABI holds within a minor version: the shared
+library of each minor version has a soname of its own (`libopenfits.so.0.6` for 0.6.x), and from 0.2 on a DLL name of
+its own on Windows (`openfits-0.6.dll`, `libopenfits-0.6.dll` with MinGW, where 0.1 has `openfits.dll` and
+`libopenfits.dll`), so a program built against 0.5 is rebuilt to use 0.6. The import library keeps
 its name (`openfits.lib`, `libopenfits.dll.a`), so a program links as before. Files are read from, written to and
 edited through sources, sinks and devices of the library or of the application; their header and data units are walked
 as they are asked for, and their headers read as typed values and changed.
@@ -141,6 +143,7 @@ The Visual Studio presets use Ninja, which needs the compiler environment: run t
 | `OPENFITS_BUILD_DOCS` | `OFF` | Add the `docs` target, which builds the API documentation with Doxygen |
 | `OPENFITS_INSTALL` | `ON` at the top level | Generate the install rules |
 | `OPENFITS_WITH_TBB` | `OFF` | Use oneTBB for parallel work |
+| `OPENFITS_ENABLE_SIMD` | `ON` | Use the SIMD kernels of byte swapping, shuffling and checksums on x86-64: SSE2, and AVX2 where the processor has it, chosen at run time; the scalar code is always built |
 | `OPENFITS_WARNINGS_AS_ERRORS` | `OFF` | Treat compiler warnings as errors (CI turns it on) |
 | `OPENFITS_HARDENING` | `OFF` | Compile with hardening flags (the presets turn it on) |
 | `OPENFITS_SANITIZE` | empty | Sanitizers for the library, the tests and the fuzz targets: `address;undefined`, `thread` or `fuzzer;address;undefined` (Clang), or `address` (MSVC) |

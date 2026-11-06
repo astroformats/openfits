@@ -331,16 +331,93 @@ std::uint64_t native_file::size() const
     return static_cast<std::uint64_t>(size.QuadPart);
 }
 
+// The handle of a read: the handle of the file while no other read runs, or else one of its own to the same file, taken
+// back when the read ends. A file that cannot be opened again, which another program may have deleted, is read through
+// its own handle all the same, its reads one at a time.
+class native_file::reading
+{
+public:
+    explicit reading(const native_file& file) : file_(file), handle_(file.handle_)
+    {
+        if (!file_.readers_) {
+            return;
+        }
+        {
+            const std::scoped_lock lock(file_.readers_->mutex);
+            if (!file_.readers_->primary_busy) {
+                file_.readers_->primary_busy = true;
+                kind_ = taken::primary;
+                return;
+            }
+            if (!file_.readers_->idle.empty()) {
+                handle_ = file_.readers_->idle.back();
+                file_.readers_->idle.pop_back();
+                kind_ = taken::spare;
+                return;
+            }
+        }
+        HANDLE opened =
+            ReOpenFile(file_.handle_, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
+        if (opened != INVALID_HANDLE_VALUE) {
+            handle_ = opened;
+            kind_ = taken::spare;
+        }
+    }
+
+    reading(const reading&) = delete;
+    reading& operator=(const reading&) = delete;
+    reading(reading&&) = delete;
+    reading& operator=(reading&&) = delete;
+
+    ~reading()
+    {
+        if (kind_ == taken::shared) {
+            return;
+        }
+        try {
+            const std::scoped_lock lock(file_.readers_->mutex);
+            if (kind_ == taken::primary) {
+                file_.readers_->primary_busy = false;
+            } else {
+                file_.readers_->idle.push_back(handle_);
+            }
+        } catch (...) {
+            // A handle of its own that no list takes back is closed; the handle of the file cannot fail to be.
+            if (kind_ == taken::spare) {
+                (void)CloseHandle(handle_);
+            }
+        }
+    }
+
+    [[nodiscard]] HANDLE handle() const noexcept
+    {
+        return handle_;
+    }
+
+private:
+    enum class taken : std::uint8_t
+    {
+        shared,
+        primary,
+        spare,
+    };
+
+    const native_file& file_;
+    HANDLE handle_;
+    taken kind_ = taken::shared;
+};
+
 void native_file::read_at(std::uint64_t offset, std::span<std::byte> destination, std::size_t transfer) const
 {
     // Each call names its offset in an OVERLAPPED structure, so concurrent reads do not share a file pointer. The
     // handle is synchronous, so ReadFile() returns when the read is complete.
+    const reading read(*this);
     std::uint64_t position = offset;
     while (!destination.empty()) {
         const auto chunk = static_cast<DWORD>(std::min({destination.size(), transfer, max_transfer}));
         OVERLAPPED overlapped = at(position);
         DWORD transferred = 0;
-        if (ReadFile(handle_, destination.data(), chunk, &transferred, &overlapped) == FALSE) {
+        if (ReadFile(read.handle(), destination.data(), chunk, &transferred, &overlapped) == FALSE) {
             const std::error_code error = last_error();
             if (error.value() != ERROR_HANDLE_EOF) {
                 fail(errc::read_failed, "cannot read " + name_, error, {.offset = position});
@@ -457,6 +534,12 @@ void native_file::reset() noexcept
     HANDLE handle = std::exchange(handle_, closed_handle);
     if (handle != closed_handle) {
         (void)CloseHandle(handle);
+    }
+    if (readers_) {
+        for (HANDLE spare : readers_->idle) {
+            (void)CloseHandle(spare);
+        }
+        readers_->idle.clear();
     }
 }
 

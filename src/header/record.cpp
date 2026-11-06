@@ -32,8 +32,29 @@ void depart(std::vector<diagnostic>& departures, severity level, errc code, std:
                           .context = {}});
 }
 
+// The characters of a keyword name read from a record, found in one pass.
+struct name_characters
+{
+    bool lowercase = false;
+    bool spaces = false;
+    // Characters that a name of standard §4.1.2.1 cannot hold, lowercase letters and spaces among them.
+    bool others = false;
+};
+
+name_characters characters_of(std::string_view name) noexcept
+{
+    name_characters found;
+    for (const char c : name) {
+        found.lowercase = found.lowercase || is_lower(c);
+        found.spaces = found.spaces || c == ' ';
+        found.others = found.others || !is_keyword_char(c);
+    }
+    return found;
+}
+
 // What makes a keyword name read from a record other than a name of standard §4.1.2.1, or nothing.
-std::optional<std::string_view> name_problem(std::string_view name, bool left_justified)
+std::optional<std::string_view> name_problem(std::string_view name, const name_characters& characters,
+                                             bool left_justified)
 {
     if (!left_justified) {
         return "is not left-justified in bytes 1 to 8";
@@ -41,46 +62,55 @@ std::optional<std::string_view> name_problem(std::string_view name, bool left_ju
     if (name.size() > 8) {
         return "has more than eight characters";
     }
-    if (std::ranges::any_of(name, is_lower)) {
+    if (characters.lowercase) {
         return "has lowercase letters";
     }
-    if (name.find(' ') != std::string_view::npos) {
+    if (characters.spaces) {
         return "has spaces inside";
     }
-    if (!std::ranges::all_of(name, is_keyword_char)) {
+    if (characters.others) {
         return "has characters that keyword names cannot hold";
     }
     return std::nullopt;
 }
 
-void check_name(std::string_view name, bool left_justified, std::vector<diagnostic>& departures)
+void check_name(std::string_view name, const name_characters& characters, bool left_justified,
+                std::vector<diagnostic>& departures)
 {
-    if (const std::optional<std::string_view> problem = name_problem(name, left_justified)) {
+    if (const std::optional<std::string_view> problem = name_problem(name, characters, left_justified)) {
         depart(departures, severity::warning, errc::invalid_keyword, "4.1.2.1",
                "the keyword name " + quote(name) + ' ' + std::string(*problem));
     }
 }
 
-// A card whose departures are complete, with the keyword in their context.
-card finish(std::string keyword, value_field field, std::size_t field_begin, std::string_view record,
-            bool value_indicator, std::vector<diagnostic>& found, std::vector<diagnostic>& departures)
+// The card into, whose value and comment are read into it already, its departures complete with the keyword in their
+// context.
+void finish(std::string keyword, const value_extent& extent, std::size_t field_begin, std::string_view record,
+            bool value_indicator, std::vector<diagnostic>& found, std::vector<diagnostic>& departures, card& into)
 {
     for (diagnostic& departure : found) {
         departure.context.keyword = keyword;
         departures.push_back(std::move(departure));
     }
-    return card_access::make(std::move(keyword), std::move(field.value), std::move(field.comment), std::string(record),
-                             field_begin + field.value_begin, field_begin + field.value_end, value_indicator,
-                             field.fixed_format);
+    card_access::set_record(into, std::move(keyword), record, field_begin + extent.value_begin,
+                            field_begin + extent.value_end, value_indicator, extent.fixed_format);
 }
 
-// A card without value: bytes 9 to 80 are its text.
-card commentary_card(std::string keyword, std::string_view record, std::vector<diagnostic>& found,
-                     std::vector<diagnostic>& departures)
+// The value field of record from field_begin, read into the value and the comment of into.
+value_extent read_field_into(std::string_view record, std::size_t field_begin, bool at_byte_11,
+                             std::vector<diagnostic>& found, card& into)
 {
-    value_field field;
-    field.comment = std::string(trim_trailing_spaces(record.substr(8)));
-    return finish(std::move(keyword), std::move(field), 0, record, false, found, departures);
+    return read_value_field_into(record.substr(field_begin), at_byte_11, found, card_access::value_of(into),
+                                 card_access::comment_of(into));
+}
+
+// A card without value into into: bytes 9 to 80 are its text.
+void commentary_card(std::string keyword, std::string_view record, std::vector<diagnostic>& found,
+                     std::vector<diagnostic>& departures, card& into)
+{
+    card_access::value_of(into) = card_value();
+    card_access::comment_of(into).assign(trim_trailing_spaces(record.substr(8)));
+    finish(std::move(keyword), value_extent{}, 0, record, false, found, departures, into);
 }
 
 // The comment of a record with the space it needs from start on, cut when options allow it.
@@ -109,20 +139,36 @@ void append_comment(std::string& record, std::size_t start, std::string_view com
 
 } // namespace
 
-card card_access::make(std::string keyword, card_value value, std::string comment, std::string text,
+card card_access::make(std::string keyword, card_value value, std::string comment, std::string_view record,
                        std::size_t value_begin, std::size_t value_end, bool value_indicator, bool fixed_format)
 {
     card result;
-    result.keyword_ = std::move(keyword);
-    result.value_ = std::move(value);
-    result.comment_ = std::move(comment);
-    result.text_ = std::move(text);
-    result.value_begin_ = static_cast<std::uint8_t>(value_begin);
-    result.value_end_ = static_cast<std::uint8_t>(value_end);
-    result.value_indicator_ = value_indicator;
-    result.fixed_format_ = fixed_format;
-    result.record_ = true;
+    set(result, std::move(keyword), std::move(value), std::move(comment), record, value_begin, value_end,
+        value_indicator, fixed_format);
     return result;
+}
+
+void card_access::set(card& target, std::string keyword, card_value value, std::string comment, std::string_view record,
+                      std::size_t value_begin, std::size_t value_end, bool value_indicator, bool fixed_format)
+{
+    target.value_ = std::move(value);
+    target.comment_ = std::move(comment);
+    set_record(target, std::move(keyword), record, value_begin, value_end, value_indicator, fixed_format);
+}
+
+void card_access::set_record(card& target, std::string keyword, std::string_view record, std::size_t value_begin,
+                             std::size_t value_end, bool value_indicator, bool fixed_format)
+{
+    target.keyword_ = std::move(keyword);
+    target.text_.clear();
+    const std::size_t kept = std::min(record.size(), target.record_text_.size());
+    std::copy_n(record.begin(), kept, target.record_text_.begin());
+    std::fill(target.record_text_.begin() + static_cast<std::ptrdiff_t>(kept), target.record_text_.end(), ' ');
+    target.value_begin_ = static_cast<std::uint8_t>(value_begin);
+    target.value_end_ = static_cast<std::uint8_t>(value_end);
+    target.value_indicator_ = value_indicator;
+    target.fixed_format_ = fixed_format;
+    target.record_ = true;
 }
 
 std::string ascii_text(std::string_view text, const record_options& options, const error_context& where,
@@ -147,6 +193,13 @@ std::string ascii_text(std::string_view text, const record_options& options, con
 
 card parse_record(std::string_view record, std::vector<diagnostic>& departures)
 {
+    card result;
+    parse_record_into(record, departures, result);
+    return result;
+}
+
+void parse_record_into(std::string_view record, std::vector<diagnostic>& departures, card& into)
+{
     std::vector<diagnostic> found;
     if (!is_printable(record)) {
         depart(found, severity::warning, errc::invalid_character, "4.1.2.3",
@@ -164,9 +217,9 @@ card parse_record(std::string_view record, std::vector<diagnostic>& departures)
                     depart(found, severity::warning, errc::invalid_keyword, "4.1.2.1",
                            "the keyword name " + quote(name) + " has lowercase letters");
                 }
-                value_field field = read_value_field(record.substr(equals + 1), false, found);
-                return finish(canonical_hierarch_name(name), std::move(field), equals + 1, record, true, found,
-                              departures);
+                const value_extent extent = read_field_into(record, equals + 1, false, found, into);
+                finish(canonical_hierarch_name(name), extent, equals + 1, record, true, found, departures, into);
+                return;
             }
         }
     }
@@ -174,7 +227,8 @@ card parse_record(std::string_view record, std::vector<diagnostic>& departures)
     const std::string_view keyword_field = record.substr(0, 8);
     const std::size_t first = keyword_field.find_first_not_of(' ');
     if (first == std::string_view::npos) {
-        return commentary_card({}, record, found, departures);
+        commentary_card({}, record, found, departures, into);
+        return;
     }
 
     // The name runs to the first space or equals sign; a value indicator elsewhere than in bytes 9 and 10 is read as
@@ -202,12 +256,15 @@ card parse_record(std::string_view record, std::vector<diagnostic>& departures)
             field_begin = next + 1;
         }
     }
-    std::string keyword = canonical_keyword(name);
-    check_name(name, first == 0, found);
+    // A name without lowercase letters and spaces is canonical as it is, which a copy keeps.
+    const name_characters characters = characters_of(name);
+    std::string keyword = characters.lowercase || characters.spaces ? canonical_keyword(name) : std::string(name);
+    check_name(name, characters, first == 0, found);
 
     // Commentary keywords have no value, whatever bytes 9 and 10 hold (standard §4.4.2.4).
     if (is_commentary_keyword(keyword)) {
-        return commentary_card(std::move(keyword), record, found, departures);
+        commentary_card(std::move(keyword), record, found, departures, into);
+        return;
     }
 
     // A conforming CONTINUE record has spaces in bytes 9 and 10 and a string, which a header joins to the string of
@@ -215,23 +272,26 @@ card parse_record(std::string_view record, std::vector<diagnostic>& departures)
     if (keyword == "CONTINUE") {
         if (record.substr(8, 2) == "  ") {
             std::vector<diagnostic> continued = found;
-            value_field field = read_value_field(record.substr(10), false, continued);
-            if (field.value.kind() == value_kind::string) {
-                return finish(std::move(keyword), std::move(field), 10, record, false, continued, departures);
+            const value_extent extent = read_field_into(record, 10, false, continued, into);
+            if (card_access::value_of(into).kind() == value_kind::string) {
+                finish(std::move(keyword), extent, 10, record, false, continued, departures, into);
+                return;
             }
         }
-        return commentary_card(std::move(keyword), record, found, departures);
+        commentary_card(std::move(keyword), record, found, departures, into);
+        return;
     }
 
     if (!indicator) {
-        return commentary_card(std::move(keyword), record, found, departures);
+        commentary_card(std::move(keyword), record, found, departures, into);
+        return;
     }
     if (misplaced) {
         depart(found, severity::warning, errc::invalid_value_indicator, "4.1.2.2",
                "the value indicator is not '= ' in bytes 9 and 10");
     }
-    value_field field = read_value_field(record.substr(field_begin), field_begin == 10, found);
-    return finish(std::move(keyword), std::move(field), field_begin, record, true, found, departures);
+    const value_extent extent = read_field_into(record, field_begin, field_begin == 10, found, into);
+    finish(std::move(keyword), extent, field_begin, record, true, found, departures, into);
 }
 
 namespace {

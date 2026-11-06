@@ -640,8 +640,8 @@ compressed_unit compress_table(const table_model& model, std::span<const std::by
 
     const std::span<const std::byte> rows = data.first(info.rows * info.row_size);
     const std::span<const std::byte> heap = data.subspan(info.rows * info.row_size);
-    gzip_encoder gzip(options.gzip_level.value_or(-1));
-    gzip_encoder descriptors(-1);
+    gzip_encoder gzip(options.gzip_level.value_or(default_tile_level));
+    gzip_encoder descriptors(default_tile_level);
     std::vector<std::byte> out_heap;
     std::vector<std::byte> cells(checked_cast<std::size_t>(tiles * fields * 16));
     std::vector<std::uint64_t> largest(fields, 0);

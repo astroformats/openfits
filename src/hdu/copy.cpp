@@ -23,7 +23,7 @@ namespace {
 
 constexpr std::uint64_t block_size = 2880;
 // The most bytes of a unit that a copy reads at once.
-constexpr std::uint64_t copy_transfer = std::uint64_t{4} << 20;
+constexpr std::uint64_t copy_transfer = staging_size;
 
 bool is_checksum_keyword(std::string_view keyword) noexcept
 {

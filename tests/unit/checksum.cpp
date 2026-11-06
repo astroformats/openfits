@@ -113,6 +113,26 @@ TEST(checksum, sums_fold_in_rounds_of_any_size)
     }
 }
 
+// The kernel of AVX2 adds four pairs a register, two registers a turn, within the rounds of the scalar code: every
+// length up to some registers, in rounds that end within a register and between registers, gives the sum of the scalar
+// code, for bytes that carry the most into each round too.
+TEST(checksum, the_simd_kernel_gives_the_sums_of_the_scalar_code)
+{
+    using openfits::detail::simd_kernel;
+    const std::vector<std::byte> bytes = random_bytes(700, 3);
+    const std::vector<std::byte> ones(700, std::byte{0xFF});
+    for (std::size_t length = 0; length <= bytes.size(); ++length) {
+        for (const std::size_t round : {1U, 3U, 4U, 5U, 8U, 9U, 17U, 1U << 30U}) {
+            const std::span<const std::byte> part = std::span(bytes).first(length);
+            EXPECT_EQ(sum_of(part, round, simd_kernel::best), sum_of(part, round, simd_kernel::scalar))
+                << length << " " << round;
+            const std::span<const std::byte> carries = std::span(ones).first(length);
+            EXPECT_EQ(sum_of(carries, round, simd_kernel::best), sum_of(carries, round, simd_kernel::scalar))
+                << length << " " << round;
+        }
+    }
+}
+
 TEST(checksum, sums_of_pieces_continue_their_integers)
 {
     const std::vector<std::byte> bytes = random_bytes(103, 3);

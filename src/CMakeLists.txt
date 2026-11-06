@@ -41,6 +41,7 @@ set(internal_sources
     core/keyword_name.cpp
     core/parallel.cpp
     core/quote.cpp
+    core/simd.cpp
     core/utf16.cpp
     core/utf8.cpp
     core/value_text.cpp
@@ -61,6 +62,7 @@ set(internal_sources
     hdu/structure.cpp
     hdu/walk.cpp
     header/emission.cpp
+    header/keyword_table.cpp
     header/keywords.cpp
     header/long_string.cpp
     header/record.cpp
@@ -148,7 +150,7 @@ target_link_libraries(openfits PRIVATE ${private_dependencies})
 
 # The optional parts of the internal code, which the tests and fuzz targets see too.
 set(internal_definitions "")
-foreach(option OPENFITS_WITH_TBB)
+foreach(option OPENFITS_ENABLE_SIMD OPENFITS_WITH_TBB)
     if(${option})
         list(APPEND internal_definitions ${option})
     endif()

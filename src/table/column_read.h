@@ -8,6 +8,7 @@
 #include <openfits/reader.h>
 #include <openfits/table.h>
 
+#include "core/scratch_buffer.h"
 #include "io/thread_safe_source.h"
 
 #include <cstddef>
@@ -24,7 +25,7 @@
 namespace openfits::detail {
 
 /// The most bytes that a read of columns takes from the source at once, and the chunk of rows that it gathers from.
-inline constexpr std::size_t column_transfer = std::size_t{4} << 20;
+inline constexpr std::size_t column_transfer = staging_size;
 
 /// The rows of a read: count rows from the row first.
 struct row_selection

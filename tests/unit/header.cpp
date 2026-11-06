@@ -86,6 +86,90 @@ TEST(header, finds_the_first_card_of_a_keyword_in_any_case_and_with_the_hierarch
     EXPECT_EQ(cards.value<double>("EXPTIME"), 1.0);
 }
 
+// More cards than a lookup searches in order: the index sorts the keywords by their first eight bytes, and then whole
+// for those that share them, as HIERARCH names do, and keeps the first card of each.
+TEST(header, an_index_finds_the_first_card_of_keywords_that_share_their_first_eight_bytes)
+{
+    std::vector<std::string> records;
+    records.reserve(43);
+    for (int i = 0; i < 40; ++i) {
+        records.push_back("HIERARCH ESO DET CHIP" + std::to_string(i % 20) + " GAIN = " + std::to_string(i));
+    }
+    records.emplace_back("SHORT   =                    1");
+    records.emplace_back("SHORTER =                    2");
+    records.emplace_back("SHORT   =                    3");
+    std::vector<card> list;
+    list.reserve(records.size());
+    for (const std::string& record : records) {
+        list.push_back(card::parse(record));
+    }
+    const header cards(std::move(list));
+    for (int i = 0; i < 20; ++i) {
+        EXPECT_EQ(cards.index_of("ESO DET CHIP" + std::to_string(i) + " GAIN"), static_cast<std::size_t>(i)) << i;
+    }
+    EXPECT_EQ(cards.index_of("SHORT"), 40U);
+    EXPECT_EQ(cards.index_of("SHORTER"), 41U);
+    EXPECT_EQ(cards.index_of("ESO DET CHIP"), std::nullopt);
+    EXPECT_EQ(cards.index_of("ESO DET CHIP1 GAIN X"), std::nullopt);
+    EXPECT_EQ(cards.value<std::int64_t>("ESO DET CHIP7 GAIN"), 7);
+}
+
+// The keywords that a file departing from the standard can hold, which differ only in the zero bytes at their end or
+// begin with one, are found by an index as by a search: fuzz_header found the first card of eight bytes from 0 to 7
+// missing from the index, which took it for the blank keyword.
+TEST(header, an_index_finds_keywords_that_differ_in_the_zero_bytes_at_their_end)
+{
+    std::vector<std::string> keywords;
+    keywords.reserve(38);
+    for (int i = 0; i < 34; ++i) {
+        keywords.push_back("KEY" + std::to_string(i));
+    }
+    keywords.emplace_back("A");
+    keywords.push_back(std::string("A") + '\0');
+    keywords.emplace_back(1, '\0');
+    std::string bytes(8, '\0');
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        bytes[i] = static_cast<char>(i);
+    }
+    keywords.push_back(bytes);
+    std::vector<card> list;
+    list.reserve(keywords.size() + 1);
+    list.push_back(card::commentary("", "a blank card"));
+    for (std::size_t i = 0; i < keywords.size(); ++i) {
+        const std::string number = std::to_string(i);
+        std::string record = keywords[i];
+        record.resize(8, ' ');
+        record += "= " + std::string(20 - number.size(), ' ') + number;
+        list.push_back(card::parse(record));
+    }
+    const header cards(std::move(list));
+    for (std::size_t i = 0; i < cards.size(); ++i) {
+        EXPECT_EQ(cards.index_of(cards[i].keyword()), i) << i;
+    }
+}
+
+// The index made for a header of 33 cards grows as cards are appended, and keeps finding the first card of each
+// keyword, short ones and HIERARCH names that share their first eight bytes alike.
+TEST(header, an_index_keeps_finding_every_keyword_as_it_grows)
+{
+    header cards;
+    std::vector<std::string> keywords;
+    keywords.reserve(1000);
+    for (int i = 0; i < 1000; ++i) {
+        keywords.push_back(i % 2 == 0 ? "K" + std::to_string(i) : "ESO DET CHIP" + std::to_string(i) + " GAIN");
+        cards.append(card(keywords.back(), i));
+        if (i % 97 == 0 || i == 999) {
+            for (std::size_t k = 0; k < keywords.size(); ++k) {
+                ASSERT_EQ(cards.index_of(keywords[k]), k) << keywords[k] << " in " << cards.size() << " cards";
+            }
+        }
+    }
+    cards.append(card("K0", 1));
+    EXPECT_EQ(cards.index_of("K0"), 0U);
+    EXPECT_EQ(cards.index_of("ESO DET CHIP"), std::nullopt);
+    EXPECT_EQ(cards.index_of("ESO DET CHIP1 GAIN X"), std::nullopt);
+}
+
 TEST(header, matches_keywords_with_patterns)
 {
     const header cards = parsed({"NAXIS   =                    2", "NAXIS1  =                   10",

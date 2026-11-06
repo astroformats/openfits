@@ -4,9 +4,12 @@
 #include "header/keywords.h"
 
 #include "core/ascii.h"
+#include "core/endian.h"
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cstring>
 #include <string>
 #include <utility>
 
@@ -135,40 +138,182 @@ constexpr auto classified_shapes = std::to_array<classified>({
     {"PSCAL#", value_class::number}, {"PZERO#", value_class::number},
 });
 
+// The tables above sorted at compile time, for the binary searches of the lookups, which the analysis of a header makes
+// for each of its cards; the tables keep the order of the standard, which a reader follows.
+template <std::size_t N> constexpr std::array<std::string_view, N> sorted(std::array<std::string_view, N> names)
+{
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+template <std::size_t N> constexpr std::array<classified, N> sorted(std::array<classified, N> names)
+{
+    std::sort(names.begin(), names.end(), [](const classified& a, const classified& b) { return a.first < b.first; });
+    return names;
+}
+
+// True when a sorted table holds each name once.
+template <typename T, std::size_t N, typename Key> constexpr bool unique(const std::array<T, N>& table, Key key)
+{
+    for (std::size_t i = 1; i < N; ++i) {
+        if (key(table[i - 1]) == key(table[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+constexpr auto name_of = [](std::string_view name) { return name; };
+constexpr auto first_of = [](const classified& entry) { return entry.first; };
+
+constexpr auto sorted_structural_names = sorted(structural_names);
+constexpr auto sorted_structural_roots = sorted(structural_roots);
+constexpr auto sorted_compression_names = sorted(compression_names);
+constexpr auto sorted_compression_roots = sorted(compression_roots);
+constexpr auto sorted_reserved_names = sorted(reserved_names);
+constexpr auto sorted_alternate_names = sorted(alternate_names);
+constexpr auto sorted_reserved_shapes = sorted(reserved_shapes);
+constexpr auto sorted_classified_names = sorted(classified_names);
+constexpr auto sorted_classified_shapes = sorted(classified_shapes);
+static_assert(unique(sorted_structural_names, name_of) && unique(sorted_structural_roots, name_of) &&
+              unique(sorted_compression_names, name_of) && unique(sorted_compression_roots, name_of) &&
+              unique(sorted_reserved_names, name_of) && unique(sorted_alternate_names, name_of) &&
+              unique(sorted_reserved_shapes, name_of) && unique(sorted_classified_names, first_of) &&
+              unique(sorted_classified_shapes, first_of));
+
+// The first characters of the names, roots and forms of the tables above, a digit for the # that starts a form: a
+// keyword that starts with another character is in none of them, which the lookups that the analysis of a header makes
+// for each of its cards tell at once for most keywords.
+constexpr std::array<bool, 256> first_characters = [] {
+    std::array<bool, 256> marked{};
+    const auto mark = [&marked](std::string_view name) {
+        if (name.empty()) {
+            return;
+        }
+        if (name.front() == '#') {
+            for (char digit = '0'; digit <= '9'; ++digit) {
+                marked[static_cast<unsigned char>(digit)] = true;
+            }
+        } else {
+            marked[static_cast<unsigned char>(name.front())] = true;
+        }
+    };
+    for (const std::string_view name : structural_names) {
+        mark(name);
+    }
+    for (const std::string_view name : structural_roots) {
+        mark(name);
+    }
+    for (const std::string_view name : compression_names) {
+        mark(name);
+    }
+    for (const std::string_view name : compression_roots) {
+        mark(name);
+    }
+    for (const std::string_view name : reserved_names) {
+        mark(name);
+    }
+    for (const std::string_view name : alternate_names) {
+        mark(name);
+    }
+    for (const std::string_view name : reserved_shapes) {
+        mark(name);
+    }
+    for (const classified& entry : classified_names) {
+        mark(entry.first);
+    }
+    for (const classified& entry : classified_shapes) {
+        mark(entry.first);
+    }
+    mark("DATE");
+    return marked;
+}();
+
+// True when name may be in one of the tables, a name of DATE.. among them: false for a keyword that starts with a
+// character that starts none of them. The blank keyword is in reserved_names.
+bool may_be_listed(std::string_view name) noexcept
+{
+    return name.empty() || first_characters[static_cast<unsigned char>(name.front())];
+}
+
 template <std::size_t N> bool contains(const std::array<std::string_view, N>& names, std::string_view name) noexcept
 {
-    return std::ranges::find(names, name) != names.end();
+    return std::binary_search(names.begin(), names.end(), name);
 }
 
 template <std::size_t N>
 std::optional<value_class> class_of(const std::array<classified, N>& names, std::string_view name) noexcept
 {
-    const auto found = std::ranges::find(names, name, &classified::first);
-    if (found == names.end()) {
+    const auto found =
+        std::lower_bound(names.begin(), names.end(), name,
+                         [](const classified& entry, std::string_view key) { return entry.first < key; });
+    if (found == names.end() || found->first != name) {
         return std::nullopt;
     }
     return found->second;
 }
 
-// name with every run of digits written #, without the letter A to Z of an alternate description that follows a digit
-// at its end.
-std::string shape_of(std::string_view name)
+// The root of an indexed keyword: name without the one to three digits that end it, the first of them not 0, as
+// keyword_index() takes them; empty for a name that does not end so. No root of the tables ends with a digit.
+std::string_view indexed_root(std::string_view name) noexcept
 {
-    std::string shape;
-    for (const char c : name) {
-        if (!is_digit(c)) {
-            shape += c;
-        } else if (shape.empty() || shape.back() != '#') {
-            shape += '#';
-        }
+    std::size_t end = name.size();
+    while (end > 0 && is_digit(name[end - 1])) {
+        --end;
     }
-    if (shape.size() >= 2 && is_upper(shape.back()) && shape[shape.size() - 2] == '#') {
-        shape.pop_back();
+    const std::size_t digits = name.size() - end;
+    if (end == 0 || digits == 0 || digits > 3 || name[end] == '0') {
+        return {};
     }
-    return shape;
+    return name.substr(0, end);
 }
 
+// name with every run of digits written #, without the letter A to Z of an alternate description that follows a digit
+// at its end: in a buffer of the size of a record, which a name longer than it, no shape of the standard, leaves empty.
+class keyword_shape
+{
+public:
+    explicit keyword_shape(std::string_view name) noexcept
+    {
+        if (name.size() > chars_.size()) {
+            return;
+        }
+        for (const char c : name) {
+            if (!is_digit(c)) {
+                chars_[size_++] = c;
+            } else if (size_ == 0 || chars_[size_ - 1] != '#') {
+                chars_[size_++] = '#';
+            }
+        }
+        if (size_ >= 2 && is_upper(chars_[size_ - 1]) && chars_[size_ - 2] == '#') {
+            --size_;
+        }
+    }
+
+    [[nodiscard]] std::string_view view() const noexcept
+    {
+        return {chars_.data(), size_};
+    }
+
+private:
+    std::array<char, 80> chars_{};
+    std::size_t size_ = 0;
+};
+
 } // namespace
+
+std::uint64_t keyword_prefix(std::string_view keyword) noexcept
+{
+    // The bytes in an integer of eight, the first the most significant: one load, swapped on a little-endian host.
+    std::array<unsigned char, 8> bytes{};
+    std::copy_n(keyword.begin(), std::min(keyword.size(), bytes.size()), bytes.begin());
+    std::uint64_t prefix = 0;
+    std::memcpy(&prefix, bytes.data(), bytes.size());
+    if constexpr (std::endian::native == std::endian::little) {
+        prefix = byte_swap(prefix);
+    }
+    return prefix;
+}
 
 std::optional<std::uint32_t> keyword_index(std::string_view name, std::string_view root) noexcept
 {
@@ -188,43 +333,49 @@ std::optional<std::uint32_t> keyword_index(std::string_view name, std::string_vi
 
 bool is_structural_keyword(std::string_view name) noexcept
 {
-    if (contains(structural_names, name) || contains(compression_names, name)) {
+    if (!may_be_listed(name)) {
+        return false;
+    }
+    if (contains(sorted_structural_names, name) || contains(sorted_compression_names, name)) {
         return true;
     }
-    const auto indexed = [name](std::string_view root) { return keyword_index(name, root).has_value(); };
-    return std::ranges::any_of(structural_roots, indexed) || std::ranges::any_of(compression_roots, indexed);
+    const std::string_view root = indexed_root(name);
+    return !root.empty() && (contains(sorted_structural_roots, root) || contains(sorted_compression_roots, root));
 }
 
 bool is_reserved_keyword(std::string_view name)
 {
-    if (is_structural_keyword(name) || contains(reserved_names, name) || name.starts_with("DATE")) {
+    if (!may_be_listed(name)) {
+        return false;
+    }
+    if (is_structural_keyword(name) || contains(sorted_reserved_names, name) || name.starts_with("DATE")) {
         return true;
     }
-    if (contains(alternate_names, name) ||
-        (name.size() > 1 && is_upper(name.back()) && contains(alternate_names, name.substr(0, name.size() - 1)))) {
+    if (contains(sorted_alternate_names, name) || (name.size() > 1 && is_upper(name.back()) &&
+                                                   contains(sorted_alternate_names, name.substr(0, name.size() - 1)))) {
         return true;
     }
-    return std::ranges::any_of(name, is_digit) && contains(reserved_shapes, shape_of(name));
+    return std::ranges::any_of(name, is_digit) && contains(sorted_reserved_shapes, keyword_shape(name).view());
 }
 
 std::optional<value_class> reserved_value_class(std::string_view name)
 {
-    if (is_structural_keyword(name)) {
+    if (!may_be_listed(name) || is_structural_keyword(name)) {
         return std::nullopt;
     }
-    if (const std::optional<value_class> kind = class_of(classified_names, name)) {
+    if (const std::optional<value_class> kind = class_of(sorted_classified_names, name)) {
         return kind;
     }
     if (name.size() > 1 && is_upper(name.back())) {
         const std::string_view root = name.substr(0, name.size() - 1);
-        if (contains(alternate_names, root)) {
-            return class_of(classified_names, root);
+        if (contains(sorted_alternate_names, root)) {
+            return class_of(sorted_classified_names, root);
         }
     }
     if (!std::ranges::any_of(name, is_digit)) {
         return std::nullopt;
     }
-    return class_of(classified_shapes, shape_of(name));
+    return class_of(sorted_classified_shapes, keyword_shape(name).view());
 }
 
 std::string_view reserved_section(std::string_view name)
@@ -256,7 +407,8 @@ std::string_view reserved_section(std::string_view name)
         }
     }
     if (std::ranges::any_of(name, is_digit)) {
-        const std::string shape = shape_of(name);
+        const keyword_shape shape_of_name(name);
+        const std::string_view shape = shape_of_name.view();
         for (const section_of& entry : shaped) {
             if (entry.first == shape) {
                 return entry.second;

@@ -37,10 +37,15 @@ namespace openfits::detail {
     return is_lower(c) ? static_cast<char>(c - 'a' + 'A') : c;
 }
 
-/// True when every character of text is printable.
+/// True when every character of text is printable. Without a branch for each character, which vectorizes: a reader
+/// checks every record of a header, nearly always printable.
 [[nodiscard]] constexpr bool is_printable(std::string_view text) noexcept
 {
-    return std::ranges::all_of(text, [](char c) { return is_printable(c); });
+    unsigned others = 0;
+    for (const char c : text) {
+        others |= static_cast<unsigned>(c < ' ') | static_cast<unsigned>(c > '~');
+    }
+    return others == 0;
 }
 
 /// text without leading spaces.

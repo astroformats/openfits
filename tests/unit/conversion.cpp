@@ -7,6 +7,7 @@
 #include <openfits/types.h>
 
 #include "data/conversion_kernels.h"
+#include "support/sequence.h"
 #include "support/throws.h"
 
 #include <gtest/gtest.h>
@@ -21,6 +22,7 @@
 #include <limits>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -46,6 +48,7 @@ using openfits::detail::make_read_conversion;
 using openfits::detail::make_write_conversion;
 using openfits::detail::read_conversion;
 using openfits::detail::write_conversion;
+using openfits::test::splitmix64;
 using openfits::test::throws;
 
 namespace kernels = openfits::detail::kernels;
@@ -468,6 +471,54 @@ TEST(conversion, a_run_of_values_converts_as_each_value_alone_forwards_backwards
     std::vector<std::uint16_t> in_place(stored.size());
     std::memcpy(in_place.data(), data.data(), data.size());
     EXPECT_EQ(in_place, forwards);
+}
+
+// Runs of every length up to past twice kernels::kernel_run of the bits of a sequence, read as Stored into T, which has
+// its size, as a run and in place, against each value read alone: a bitwise conversion swaps a shorter run in a loop of
+// its own and a longer one through the kernels of core/endian.
+template <typename Stored, typename T> void check_runs(bitpix stored, numeric_type target, const scaling& values)
+{
+    const read_conversion conversion = make_read_conversion(stored, target, values, std::nullopt, blank_policy::nan,
+                                                            0.0, overflow_policy::refuse, rounding::truncate, 0);
+    splitmix64 sequence(sizeof(Stored));
+    for (std::size_t count = 1; count <= (2 * kernels::kernel_run) + 1; ++count) {
+        for (const bool swap : {true, false}) {
+            SCOPED_TRACE(testing::Message()
+                         << "BITPIX " << static_cast<int>(stored) << ", " << count << " values, swap " << swap);
+            std::vector<std::byte> in(count * sizeof(Stored));
+            const std::span<std::byte> in_bytes(in);
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto bits = kernels::cast<kernels::bits_of<Stored>>(sequence.next());
+                std::memcpy(in_bytes.subspan(i * sizeof(Stored)).data(), &bits, sizeof(Stored));
+            }
+            std::vector<std::byte> alone(count * sizeof(T));
+            const std::span<std::byte> alone_bytes(alone);
+            for (std::size_t i = 0; i < count; ++i) {
+                (void)read(swap, conversion, in_bytes.subspan(i * sizeof(Stored)).data(), 1,
+                           alone_bytes.subspan(i * sizeof(T)).data(), nullptr, 1);
+            }
+            std::vector<std::byte> run(count * sizeof(T));
+            (void)read(swap, conversion, in.data(), 1, run.data(), nullptr, count);
+            EXPECT_EQ(run, alone);
+            std::vector<std::byte> data = in;
+            (void)(swap ? kernels::read_in_place<true>(conversion, data.data(), nullptr, count)
+                        : kernels::read_in_place<false>(conversion, data.data(), nullptr, count));
+            EXPECT_EQ(data, alone);
+        }
+    }
+}
+
+TEST(conversion, a_bitwise_run_converts_as_each_value_alone_at_every_length)
+{
+    check_runs<std::int16_t, std::int16_t>(bitpix::int16, numeric_type::int16, {});
+    check_runs<std::int32_t, std::int32_t>(bitpix::int32, numeric_type::int32, {});
+    check_runs<std::int64_t, std::int64_t>(bitpix::int64, numeric_type::int64, {});
+    check_runs<float, float>(bitpix::float32, numeric_type::float32, {});
+    check_runs<double, double>(bitpix::float64, numeric_type::float64, {});
+    // The unsigned conventions of standard §5.2.5, Table 11, which flip the sign bit.
+    check_runs<std::int16_t, std::uint16_t>(bitpix::int16, numeric_type::uint16, {.zero = 32768.0});
+    check_runs<std::int32_t, std::uint32_t>(bitpix::int32, numeric_type::uint32, {.zero = 2147483648.0});
+    check_runs<std::int64_t, std::uint64_t>(bitpix::int64, numeric_type::uint64, {.zero = two_to_63});
 }
 
 // BLANK of integer data under each policy (standard §4.4.2.5): the value in the array before scaling.

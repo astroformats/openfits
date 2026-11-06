@@ -5,8 +5,9 @@
 
 find_package(benchmark CONFIG REQUIRED)
 
-add_executable(openfits_benchmarks main.cpp compression.cpp images.cpp tables.cpp)
-target_link_libraries(openfits_benchmarks PRIVATE openfits::openfits benchmark::benchmark)
+add_executable(openfits_benchmarks main.cpp codecs.cpp compression.cpp edits.cpp images.cpp kernels.cpp tables.cpp)
+# The kernels of the library are measured alone too, scalar against SIMD, through its internal code.
+target_link_libraries(openfits_benchmarks PRIVATE openfits_internal benchmark::benchmark)
 # windows.h without the min and max macros, which break the standard headers included after it.
 if(WIN32)
     target_compile_definitions(openfits_benchmarks PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -19,8 +20,9 @@ if(OPENFITS_HARDENING)
 endif()
 
 # One short run of each benchmark, so that they keep working. Its numbers mean nothing; run the program itself, in a
-# release build, for real ones. The benchmarks of the frame of a camera, 6000 x 4000 pixels, and of tables of a million
-# rows work on about 100 MB, so the smoke run leaves them out.
+# release build, for real ones. The benchmarks of the frame of a camera, 6000 x 4000 pixels, of a unit of 100 MB and of
+# tables of a million rows work on about 100 MB, so the smoke run leaves them out.
 add_test(NAME benchmarks.smoke
-    COMMAND openfits_benchmarks --benchmark_min_time=0.001s "--benchmark_filter=-/(frame|million)$")
+    COMMAND openfits_benchmarks --benchmark_min_time=0.001s
+        "--benchmark_filter=-/(frame|million|large|large_in_memory)(/|$)")
 set_tests_properties(benchmarks.smoke PROPERTIES LABELS benchmark)

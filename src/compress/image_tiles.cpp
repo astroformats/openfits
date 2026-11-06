@@ -31,7 +31,6 @@
 #include <atomic>
 #include <bit>
 #include <cmath>
-#include <cstring>
 #include <limits>
 #include <string>
 #include <utility>
@@ -518,9 +517,64 @@ std::span<const std::byte> rice_values(const compressed_image& image, std::span<
     }
 }
 
-// The stored values of a tile of an integer image whose algorithm gives values of the width of the stored ones, into
-// tile as they are: the values that decode_integers() and store_integers() give, which always lie within the range of
-// the stored type, without the 64-bit integers between them. False, and nothing decoded, for another tile.
+// The values that the conversions of PLIO_1 lists take at once through blocks on the stack: 4 KiB of the widest.
+constexpr std::size_t plio_block = 512;
+
+// The values of a PLIO_1 list, less offset, as the big-endian values of BITPIX stored, of the unsigned type U of their
+// size, in tile: those that store_integers() stores, with its check of their range, without the 64-bit integers
+// between them. Through blocks on the stack, checked and narrowed in a loop of 32-bit integers that vectorizes, then
+// swapped by the kernels: the vectorizer of MSVC refuses loops between two pointers that might overlap, and SSE2
+// compares no 64-bit integers. The range of the stored type plus the offset, within 32 bits, holds the values whose
+// difference with the offset fits, taken modulo 2^32; a tile beyond it throws, its other values written all the same.
+template <typename U>
+void store_plio_values(std::span<const std::int32_t> values, std::int32_t offset, bitpix stored,
+                       std::span<std::byte> tile)
+{
+    const auto [low, high] = integer_range(stored);
+    const auto lowest =
+        static_cast<std::int32_t>(std::max<std::int64_t>(low + offset, std::numeric_limits<std::int32_t>::min()));
+    const auto highest =
+        static_cast<std::int32_t>(std::min<std::int64_t>(high + offset, std::numeric_limits<std::int32_t>::max()));
+    // Written before they are read: zeros would cost a pass over them at each tile.
+    // NOLINTBEGIN(cppcoreguidelines-pro-type-member-init)
+    std::array<std::int32_t, plio_block> list;
+    std::array<U, plio_block> narrowed;
+    // NOLINTEND(cppcoreguidelines-pro-type-member-init)
+    std::uint32_t beyond = 0;
+    for (std::size_t first = 0; first < values.size(); first += plio_block) {
+        const std::size_t count = std::min(plio_block, values.size() - first);
+        std::ranges::copy(values.subspan(first, count), list.begin());
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::int32_t value = list[i];
+            beyond |= static_cast<std::uint32_t>(value < lowest) | static_cast<std::uint32_t>(value > highest);
+            if constexpr (sizeof(U) == 8) {
+                narrowed[i] = static_cast<U>(std::int64_t{value} - offset);
+            } else {
+                const std::uint32_t difference = static_cast<std::uint32_t>(value) - static_cast<std::uint32_t>(offset);
+                if constexpr (sizeof(U) == 4) {
+                    narrowed[i] = difference;
+                } else {
+                    narrowed[i] = static_cast<U>(difference);
+                }
+            }
+        }
+        copy_big_endian(std::as_bytes(std::span(narrowed).first(count)),
+                        tile.subspan(first * sizeof(U), count * sizeof(U)), sizeof(U));
+    }
+    if (beyond != 0) {
+        for (const std::int32_t value : values) {
+            const std::int64_t shifted = std::int64_t{value} - offset;
+            if (shifted < low || shifted > high) {
+                throw_beyond(shifted, stored);
+            }
+        }
+    }
+}
+
+// The stored values of a tile of an integer image whose algorithm gives values of the width of the stored ones, or
+// those of a PLIO_1 list, into tile as they are: the values that decode_integers() and store_integers() give, which
+// always lie within the range of the stored type, without the 64-bit integers between them. False, and nothing
+// decoded, for another tile.
 bool decode_stored(const compressed_image& image, std::span<const std::byte> bytes, std::size_t width,
                    std::span<std::byte> tile, tile_workspace& workspace)
 {
@@ -539,7 +593,33 @@ bool decode_stored(const compressed_image& image, std::span<const std::byte> byt
         }
         inflate_into(bytes, width, image.algorithm == tile_algorithm::gzip_2, tile, workspace);
         return true;
-    case tile_algorithm::plio:
+    case tile_algorithm::plio: {
+        // The words of 1PI, big-endian, converted by the swap kernels.
+        if (bytes.size() % 2 != 0) {
+            throw_corrupt("the PLIO_1 list of the tile holds a part of a word");
+        }
+        workspace.words.resize(bytes.size() / 2);
+        copy_big_endian(bytes, std::as_writable_bytes(std::span(workspace.words)), 2);
+        workspace.i32.resize(count);
+        plio_decode(workspace.words, workspace.i32);
+        const std::int32_t offset = image.plio_offset ? 32768 : 0;
+        const bitpix stored = stored_bitpix(image);
+        switch (width) {
+        case 1:
+            store_plio_values<std::uint8_t>(workspace.i32, offset, stored, tile);
+            break;
+        case 2:
+            store_plio_values<std::uint16_t>(workspace.i32, offset, stored, tile);
+            break;
+        case 4:
+            store_plio_values<std::uint32_t>(workspace.i32, offset, stored, tile);
+            break;
+        default:
+            store_plio_values<std::uint64_t>(workspace.i32, offset, stored, tile);
+            break;
+        }
+        return true;
+    }
     case tile_algorithm::hcompress:
     case tile_algorithm::nocompress:
         break;
@@ -1531,6 +1611,7 @@ pixel_read_result read_compressed_pixels(const thread_safe_source& source, const
         parallel_for(share, [&](std::size_t worker) {
             std::vector<std::uint64_t> start(axes);
             std::vector<std::uint64_t> size(axes);
+            tile_run_buffers buffers;
             for (std::size_t i = worker; i < batch.size(); i += share) {
                 const std::uint64_t index = batch[i];
                 grid.box(index, start, size);
@@ -1572,7 +1653,7 @@ pixel_read_result read_compressed_pixels(const thread_safe_source& source, const
                         tile_cache_access::insert(*options.cache, {.owner = owner, .hdu = hdu, .tile = index}, fresh);
                     }
                 }
-                for_each_tile_run(selection, start, size, options.pitch, [&](const tile_run& run) {
+                for_each_tile_run(selection, start, size, options.pitch, buffers, [&](const tile_run& run) {
                     counts[i] += convert_read(conversion, tile.data() + (run.first * width), run.step,
                                               destination.data() + (run.destination * value_size),
                                               mask == nullptr ? nullptr : mask + run.destination, run.count);

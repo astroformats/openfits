@@ -5,6 +5,7 @@
 
 #include <openfits/export.h>
 
+#include <array>
 #include <chrono>
 #include <complex>
 #include <concepts>
@@ -128,7 +129,31 @@ public:
     card_value(std::nullptr_t) = delete;
 
     /// The kind of the value.
-    [[nodiscard]] value_kind kind() const noexcept;
+    [[nodiscard]] value_kind kind() const noexcept
+    {
+        // The alternatives of storage, in their order. The variant is never valueless: the copy of an alternative is
+        // made before it replaces the old one, and every alternative moves without throwing.
+        static_assert(std::variant_size_v<storage> == 9);
+        switch (value_.index()) {
+        case 0:
+            return value_kind::none;
+        case 1:
+            return value_kind::undefined;
+        case 2:
+            return value_kind::logical;
+        case 3:
+        case 4:
+            return value_kind::integer;
+        case 5:
+            return value_kind::real;
+        case 6:
+            return value_kind::complex_integer;
+        case 7:
+            return value_kind::complex_real;
+        default:
+            return value_kind::string;
+        }
+    }
 
     /// The value, which must be held in T: get<double>() for a real, get<std::string>() for a string,
     /// get<std::int64_t>() or get<std::uint64_t>() for an integer, by its range.
@@ -236,7 +261,7 @@ public:
         if (!record_) {
             return text_;
         }
-        return {text_.data() + value_begin_, static_cast<std::size_t>(value_end_ - value_begin_)};
+        return {record_text_.data() + value_begin_, static_cast<std::size_t>(value_end_ - value_begin_)};
     }
 
     /// The comment, without the slash that starts it, the space after the slash, and trailing spaces; the text of a
@@ -254,7 +279,7 @@ public:
     /// with_value_text() included.
     [[nodiscard]] std::string_view text() const noexcept
     {
-        return record_ ? std::string_view(text_) : std::string_view();
+        return record_ ? std::string_view(record_text_.data(), record_text_.size()) : std::string_view();
     }
 
     friend bool operator==(const card&, const card&) = default;
@@ -265,9 +290,11 @@ private:
     std::string keyword_{};
     card_value value_{};
     std::string comment_{};
-    // The record that the card was read from, or the value text of a card of with_value_text(), which record_ tells
-    // apart.
+    // The value text of a card of with_value_text().
     std::string text_{};
+    // The record that the card was read from, when record_ says that it has one: in the card itself, so that the cards
+    // of a header read from a file make no allocation for their records.
+    std::array<char, 80> record_text_{};
     std::uint8_t value_begin_ = 0;
     std::uint8_t value_end_ = 0;
     bool value_indicator_ = false;

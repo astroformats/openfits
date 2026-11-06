@@ -6,6 +6,7 @@
 #include "checksum/checksum.h"
 #include "core/ascii.h"
 #include "core/quote.h"
+#include "header/keyword_table.h"
 #include "header/keywords.h"
 #include "header/long_string.h"
 #include "header/record.h"
@@ -49,12 +50,98 @@ public:
         return window_.bytes(source_, offset_, size);
     }
 
+    // True when the content of the source is in memory, which fetch() gives whole.
+    [[nodiscard]] bool in_memory() const noexcept
+    {
+        return !memory_.empty();
+    }
+
 private:
     const thread_safe_source& source_;
     std::uint64_t offset_;
     std::uint64_t available_;
     read_window& window_;
     std::span<const std::byte> memory_{};
+};
+
+// The bytes of a piece of a header that read_header() reads for itself beyond the first read: a whole number of blocks,
+// so that no record lies across two pieces, and less than the 512 KiB from which the heap of Windows takes each block
+// from the system afresh.
+constexpr std::uint64_t piece_size = 159 * block_size;
+
+// The bytes of a header in pieces, in their order, each a whole number of records but where the source ends.
+class header_pieces
+{
+public:
+    explicit header_pieces(std::span<const std::byte> first) : pieces_{first}, size_(first.size()) {}
+
+    // The bytes held.
+    [[nodiscard]] std::uint64_t size() const noexcept
+    {
+        return size_;
+    }
+
+    [[nodiscard]] const std::vector<std::span<const std::byte>>& pieces() const noexcept
+    {
+        return pieces_;
+    }
+
+    // count more bytes read from source at offset into a buffer of their own.
+    void read(const thread_safe_source& source, std::uint64_t offset, std::uint64_t count)
+    {
+        scratch_buffer& piece = owned_.emplace_back(count);
+        source.read(offset, piece.bytes());
+        pieces_.emplace_back(piece.bytes());
+        size_ += count;
+    }
+
+    // The bytes from first to the end of the piece that holds it, at most count: a record whole, as every piece is
+    // a whole number of them. The search starts from the piece of the last call, as the reads of the records go on.
+    [[nodiscard]] std::span<const std::byte> at(std::uint64_t first, std::uint64_t count) noexcept
+    {
+        if (first < start_) {
+            current_ = 0;
+            start_ = 0;
+        }
+        for (; current_ < pieces_.size(); ++current_) {
+            const std::span<const std::byte> piece = pieces_[current_];
+            if (first - start_ < piece.size()) {
+                return piece.subspan(first - start_, std::min<std::uint64_t>(count, piece.size() - (first - start_)));
+            }
+            start_ += piece.size();
+        }
+        // Past the last piece: the next search starts from the first again.
+        current_ = 0;
+        start_ = 0;
+        return {};
+    }
+
+    // True when the bytes from first to end, across the pieces that hold them, are spaces.
+    [[nodiscard]] bool spaces_only(std::uint64_t first, std::uint64_t end) const noexcept
+    {
+        std::uint64_t start = 0;
+        for (const std::span<const std::byte> piece : pieces_) {
+            const std::uint64_t from = std::max(first, start);
+            const std::uint64_t to = std::min(end, start + piece.size());
+            if (from < to) {
+                const std::span<const std::byte> part = piece.subspan(from - start, to - from);
+                if (std::ranges::any_of(part, [](std::byte b) { return b != std::byte{' '}; })) {
+                    return false;
+                }
+            }
+            start += piece.size();
+        }
+        return true;
+    }
+
+private:
+    std::vector<std::span<const std::byte>> pieces_;
+    // The buffers of the pieces read beyond the first, whose bytes never move.
+    std::vector<scratch_buffer> owned_;
+    std::uint64_t size_ = 0;
+    // The piece of the last call of at(), and its first byte.
+    std::size_t current_ = 0;
+    std::uint64_t start_ = 0;
 };
 
 // The record at position, padded with spaces where the bytes end first.
@@ -91,8 +178,8 @@ bool starts_with_keyword(std::span<const std::byte> bytes, std::string_view keyw
 card commentary_of(const card& value)
 {
     return card_access::make(std::string(value.keyword()), {},
-                             std::string(trim_trailing_spaces(value.text().substr(8))), std::string(value.text()), 0, 0,
-                             false, false);
+                             std::string(trim_trailing_spaces(value.text().substr(8))), value.text(), 0, 0, false,
+                             false);
 }
 
 void check_continuations(std::vector<card>& cards, std::uint64_t offset, std::uint64_t hdu, diagnostic_log& log)
@@ -118,30 +205,11 @@ void check_continuations(std::vector<card>& cards, std::uint64_t offset, std::ui
     }
 }
 
-void check_repeated(const std::vector<card>& cards, std::uint64_t offset, std::uint64_t hdu, diagnostic_log& log)
+} // namespace
+
+void check_repeated_keywords(const header& cards, std::uint64_t offset, std::uint64_t hdu, diagnostic_log& log)
 {
-    // The cards with a value in the order of their keywords, then of their records, in one allocation: a card after
-    // the first of its keyword repeats it.
-    std::vector<std::size_t> valued;
-    valued.reserve(cards.size());
-    for (std::size_t i = 0; i < cards.size(); ++i) {
-        if (cards[i].has_value_indicator()) {
-            valued.push_back(i);
-        }
-    }
-    std::ranges::sort(valued, [&cards](std::size_t a, std::size_t b) {
-        const std::string_view left = cards[a].keyword();
-        const std::string_view right = cards[b].keyword();
-        return left < right || (left == right && a < b);
-    });
-    std::vector<std::size_t> repeated;
-    for (std::size_t k = 1; k < valued.size(); ++k) {
-        if (cards[valued[k]].keyword() == cards[valued[k - 1]].keyword()) {
-            repeated.push_back(valued[k]);
-        }
-    }
-    std::ranges::sort(repeated);
-    for (const std::size_t i : repeated) {
+    for (const std::size_t i : header_access::repeated_keywords(cards)) {
         const card& current = cards[i];
         log.warning(errc::repeated_keyword, "4.1.2.3",
                     "the keyword " + quote(current.keyword()) +
@@ -149,8 +217,6 @@ void check_repeated(const std::vector<card>& cards, std::uint64_t offset, std::u
                     {.hdu = hdu, .keyword = std::string(current.keyword()), .offset = offset + (i * record_length)});
     }
 }
-
-} // namespace
 
 std::span<const std::byte> read_window::bytes(const thread_safe_source& source, std::uint64_t offset,
                                               std::uint64_t size)
@@ -208,24 +274,27 @@ unit_header read_header(const thread_safe_source& source, std::uint64_t offset, 
     const std::uint64_t available = source.size() - offset;
     const std::uint64_t cap = limits.max_header_bytes == 0 ? available : std::min(available, limits.max_header_bytes);
     header_bytes bytes(source, offset, window);
-    std::span<const std::byte> data =
+    const std::span<const std::byte> start =
         bytes.fetch(std::min(std::max<std::uint64_t>(cap, record_length), first_header_read));
 
-    if (!starts_with_keyword(data, first_keyword)) {
+    if (!starts_with_keyword(start, first_keyword)) {
         return {.outcome = header_outcome::not_a_header};
     }
 
-    // The records up to END, in reads that double the bytes read so far.
+    // The records up to END: in the content of the source in memory, or in the first read through the window and then
+    // in pieces read for themselves, which no growth of a window copies again.
+    header_pieces data(bytes.in_memory() ? bytes.fetch(cap) : start);
     std::uint64_t scanned = 0;
     bool found_end = false;
     while (true) {
         while (scanned < data.size()) {
+            const std::span<const std::byte> record = data.at(scanned, record_length);
             // A record that the end of the source cuts is read as if padded with spaces.
-            if (data.size() - scanned < record_length) {
-                found_end = data.size() == available && record_at(data, scanned).starts_with(end_keyword);
+            if (record.size() < record_length) {
+                found_end = data.size() == available && record_at(record, 0).starts_with(end_keyword);
                 break;
             }
-            if (text_of(data.subspan(scanned, end_keyword.size())) == end_keyword) {
+            if (text_of(record.first(end_keyword.size())) == end_keyword) {
                 found_end = true;
                 break;
             }
@@ -240,7 +309,7 @@ unit_header read_header(const thread_safe_source& source, std::uint64_t offset, 
                       {.hdu = hdu, .offset = offset});
             return {.outcome = header_outcome::too_large};
         }
-        data = bytes.fetch(std::min<std::uint64_t>(cap, data.size() * 2));
+        data.read(source, offset + data.size(), std::min({piece_size, cap - data.size(), available - data.size()}));
     }
 
     unit_header result;
@@ -257,13 +326,14 @@ unit_header read_header(const thread_safe_source& source, std::uint64_t offset, 
                       where);
             return {.outcome = header_outcome::too_large};
         }
-        data = bytes.fetch(result.size);
-        if (!all_spaces(record_at(data, scanned).substr(8))) {
+        // The bytes read hold the block of END: pieces end with a block but where the source ends, which result.size
+        // does then too, or where the limit cuts one, whose block of END the limit refuses above.
+        if (!all_spaces(record_at(data.at(scanned, record_length), 0).substr(8))) {
             log.warning(errc::header_fill, "4.4.1.1",
                         "the END record holds other bytes than spaces after END, which are ignored",
                         {.hdu = hdu, .keyword = "END", .offset = offset + scanned});
         }
-        if (header_end < data.size() && !all_spaces(text_of(data.subspan(header_end)))) {
+        if (header_end < result.size && !data.spaces_only(header_end, result.size)) {
             log.warning(errc::header_fill, "3.3.1",
                         "the last block of the header holds other bytes than spaces after END, which are ignored",
                         {.hdu = hdu, .offset = offset + header_end});
@@ -286,23 +356,33 @@ unit_header read_header(const thread_safe_source& source, std::uint64_t offset, 
     result.cards.reserve((records_end + record_length - 1) / record_length);
     for (std::uint64_t position = 0; position < records_end; position += record_length) {
         departures.clear();
-        card value = position + record_length <= data.size()
-                         ? parse_record(text_of(data.subspan(position, record_length)), departures)
-                         : parse_record(record_at(data, position), departures);
+        // Each card made in its place, where a card made apart would be moved there.
+        card& value = result.cards.emplace_back();
+        const std::span<const std::byte> record = data.at(position, record_length);
+        if (record.size() == record_length) {
+            parse_record_into(text_of(record), departures, value);
+        } else {
+            parse_record_into(record_at(record, 0), departures, value);
+        }
         for (diagnostic& departure : departures) {
             departure.context.hdu = hdu;
             departure.context.offset = offset + position;
             log.add(std::move(departure));
         }
-        result.cards.push_back(std::move(value));
     }
     check_continuations(result.cards, offset, hdu, log);
-    check_repeated(result.cards, offset, hdu, log);
     // The blocks summed while they are at hand, for the header part of CHECKSUM.
     const bool checksum =
         std::ranges::any_of(result.cards, [](const card& value) { return value.keyword() == "CHECKSUM"; });
     if (checksum && found_end && result.size % block_size == 0) {
-        result.sum = sum_of(data.first(result.size));
+        checksum_accumulator sum;
+        std::uint64_t summed = 0;
+        for (const std::span<const std::byte> piece : data.pieces()) {
+            const std::uint64_t taken = std::min<std::uint64_t>(piece.size(), result.size - summed);
+            sum.add(piece.first(taken));
+            summed += taken;
+        }
+        result.sum = sum.sum();
     }
     return result;
 }

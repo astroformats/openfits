@@ -9,6 +9,8 @@
 #include <openfits/types.h>
 #include <openfits/writer.h>
 
+#include "core/scratch_buffer.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -80,7 +82,7 @@ struct table_model
 };
 
 /// The most bytes of rows that a write converts at once.
-inline constexpr std::size_t table_transfer = std::size_t{4} << 20;
+inline constexpr std::size_t table_transfer = staging_size;
 
 /// The model of the table of unit hdu with values for its columns.
 /// @throws usage_error and validation_error as writer::add_table() does.

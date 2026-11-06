@@ -195,6 +195,7 @@ bool unit_walk::walk_next()
     }
 
     header cards(std::move(read.cards));
+    check_repeated_keywords(cards, offset, index, log);
     unit_structure structure = analyze_header(cards, index, offset, log);
     check_checksum_keywords(cards, read.sum, index, offset, log);
     const std::uint64_t data_offset = offset + read.size;

@@ -97,6 +97,11 @@ template <typename T> void store_native(std::byte* out, T value) noexcept
 /// The values that the kernels convert at once through blocks on the stack: 4 KiB of the widest of them.
 inline constexpr std::size_t conversion_block = 512;
 
+/// The fewest values of a bitwise conversion that swap through the kernels of core/endian: a shorter run, such as the
+/// array of a row of a table, swaps in a loop of its own, which costs less than the call of a kernel, about 8 ns, where
+/// a loop takes about 0.2 ns a value on MSVC.
+inline constexpr std::size_t kernel_run = 32;
+
 /// A stored value, copied as it lies in a file, as the host holds it: its bytes swapped when Swap.
 template <bool Swap, typename T> [[nodiscard]] T to_native(T stored) noexcept
 {
@@ -400,11 +405,19 @@ private:
     }
 
     // The values of a bitwise conversion, as unsigned integers: their bytes swapped, and the sign bit flipped for an
-    // offset, which loops of unsigned integers vectorize best.
+    // offset, through the swap kernels from kernel_run values on, and otherwise in a loop of unsigned integers, which
+    // vectorizes when nothing swaps.
     template <arithmetic A> static void bitwise_run(const std::byte* in, std::byte* out, std::size_t count) noexcept
     {
         using bits = bits_of<Stored>;
         constexpr bits sign = A == arithmetic::sign_flip ? cast<bits>(bits{1} << (sizeof(Stored) * 8 - 1)) : bits{0};
+        if constexpr (Swap && sizeof(bits) > 1) {
+            if (count >= kernel_run) {
+                swap_items(std::span<const std::byte>(in, count * sizeof(bits)),
+                           std::span<std::byte>(out, count * sizeof(bits)), sizeof(bits), sign);
+                return;
+            }
+        }
         for (std::size_t i = 0; i < count; ++i) {
             bits value{};
             std::memcpy(&value, in + (i * sizeof(bits)), sizeof(bits));
@@ -422,6 +435,13 @@ private:
     {
         using bits = bits_of<Stored>;
         constexpr bits sign = A == arithmetic::sign_flip ? cast<bits>(bits{1} << (sizeof(Stored) * 8 - 1)) : bits{0};
+        if constexpr (Swap && sizeof(bits) > 1) {
+            if (count >= kernel_run) {
+                const std::span<std::byte> bytes(data, count * sizeof(bits));
+                swap_items(bytes, bytes, sizeof(bits), sign);
+                return;
+            }
+        }
         for (std::size_t i = 0; i < count; ++i) {
             bits value{};
             std::memcpy(&value, data + (i * sizeof(bits)), sizeof(bits));
