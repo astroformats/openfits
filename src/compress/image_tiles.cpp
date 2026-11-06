@@ -749,12 +749,27 @@ bool decode_integers(const compressed_image& image, std::span<const std::uint64_
             }
         }
         hcompress_decode(bytes, rows, row, image.smooth, std::span<std::int64_t>(values));
-        // A lossy tile restores values a little beyond those that it compressed, which lay within the integers of the
-        // image, or the codes of 32 bits (standard §10.4.4): such a value is taken to the nearest of them.
         const auto [low, high] = quantized
                                      ? std::pair<std::int64_t, std::int64_t>{std::numeric_limits<std::int32_t>::min(),
                                                                              std::numeric_limits<std::int32_t>::max()}
                                      : integer_range(stored_bitpix(image));
+        if (hcompress_scale(bytes) <= 1) {
+            // A lossless tile restores the values that it compressed, which lay within the integers of the image, or
+            // the codes of 32 bits: one beyond them is corrupt, as in a tile of any other algorithm.
+            for (const std::int64_t value : values) {
+                if (value >= low && value <= high) {
+                    continue;
+                }
+                if (quantized) {
+                    throw_corrupt("the HCOMPRESS_1 data decode to " + std::to_string(value) +
+                                  ", beyond the 32-bit codes of a quantized tile");
+                }
+                throw_beyond(value, stored_bitpix(image));
+            }
+            return true;
+        }
+        // A lossy tile restores values a little beyond those that it compressed, which lay within the integers of the
+        // image, or the codes of 32 bits (standard §10.4.4): such a value is taken to the nearest of them.
         for (std::int64_t& value : values) {
             value = std::clamp(value, low, high);
         }
@@ -1387,10 +1402,20 @@ compressed_image describe_compressed_image(const hdu_info& unit, bool with_heade
 
     if (floating) {
         // Quantized when ZSCALE and ZZERO are given, as columns or as constants of old files (standard §10.2), unless
-        // ZQUANTIZ says NONE, CFITSIO's name of a lossless image.
+        // ZQUANTIZ says NONE, CFITSIO's name of a lossless image. One without the other leaves no scaling to restore
+        // the values with.
         image.scale = keyword_of<double>(cards, "ZSCALE", hdu);
         image.zero = keyword_of<double>(cards, "ZZERO", hdu);
-        image.quantized = image.scales || image.zeros || image.scale || image.zero;
+        const bool scaled = image.scales || image.scale;
+        const bool shifted = image.zeros || image.zero;
+        if (scaled != shifted) {
+            refuse(hdu,
+                   std::string("the compressed image gives ") +
+                       (scaled ? "ZSCALE without ZZERO" : "ZZERO without ZSCALE") +
+                       ", which a quantized image gives together (standard §10.2)",
+                   scaled ? "ZZERO" : "ZSCALE");
+        }
+        image.quantized = scaled;
         const std::optional<std::string> method = string_keyword(cards, "ZQUANTIZ", hdu);
         if (method && *method == "NONE") {
             image.quantized = false;
@@ -1562,6 +1587,8 @@ pixel_read_result read_compressed_pixels(const thread_safe_source& source, const
     std::vector<tile_workspace> workspaces(workers);
     std::vector<std::vector<std::byte>> decoded(workers);
     tile_rows rows(source, unit, image);
+    // The cache of the read, held apart from the options, which no call of the loop changes.
+    tile_cache* const cache = options.cache;
     std::uint64_t clamped = 0;
     std::size_t next = 0;
     while (next < tiles.size()) {
@@ -1579,8 +1606,8 @@ pixel_read_result read_compressed_pixels(const thread_safe_source& source, const
         std::vector<std::uint64_t> missing;
         std::vector<std::size_t> positions;
         for (std::size_t i = 0; i < batch.size(); ++i) {
-            if (options.cache != nullptr) {
-                cached[i] = tile_cache_access::find(*options.cache, {.owner = owner, .hdu = hdu, .tile = batch[i]});
+            if (cache != nullptr) {
+                cached[i] = tile_cache_access::find(*cache, {.owner = owner, .hdu = hdu, .tile = batch[i]});
             }
             if (!cached[i]) {
                 missing.push_back(batch[i]);
@@ -1623,7 +1650,7 @@ pixel_read_result read_compressed_pixels(const thread_safe_source& source, const
                 } else {
                     std::span<std::byte> target;
                     std::shared_ptr<scratch_buffer> fresh;
-                    if (options.cache != nullptr) {
+                    if (cache != nullptr) {
                         fresh = std::make_shared<scratch_buffer>(length);
                         target = fresh->bytes();
                     } else {
@@ -1650,7 +1677,7 @@ pixel_read_result read_compressed_pixels(const thread_safe_source& source, const
                         // The cache may keep no reference, when another read keeps the tile already or it is larger
                         // than the cache: the read keeps one until it has converted the values.
                         kept = fresh;
-                        tile_cache_access::insert(*options.cache, {.owner = owner, .hdu = hdu, .tile = index}, fresh);
+                        tile_cache_access::insert(*cache, {.owner = owner, .hdu = hdu, .tile = index}, fresh);
                     }
                 }
                 for_each_tile_run(selection, start, size, options.pitch, buffers, [&](const tile_run& run) {

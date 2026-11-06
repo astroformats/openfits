@@ -48,6 +48,23 @@ TEST(keyword_name, the_canonical_name_of_the_hierarch_convention_has_single_spac
     EXPECT_EQ(canonical_keyword("HIERARCHY"), "HIERARCHY");
 }
 
+// A canonical name is its own canonical name, so that a card is found by its keyword: a hierarchical name that starts
+// with HIERARCH again, as the record "HIERARCH HIERARCH ESO DET NDIT= 11" of a fuzzed file holds, loses every prefix.
+TEST(keyword_name, the_canonical_name_is_its_own_canonical_name)
+{
+    using openfits::detail::canonical_hierarch_name;
+    for (const std::string_view name :
+         {"HIERARCH HIERARCH ESO DET NDIT", "hierarch  Hierarch   eso", "HIERARCH HIERARCH", "HIERARCH ESO DET DIT",
+          "ESO DET DIT", "EXPTIME", "HIERARCH"}) {
+        const std::string canonical = canonical_keyword(name);
+        EXPECT_EQ(canonical_keyword(canonical), canonical) << name;
+        EXPECT_EQ(canonical_hierarch_name(canonical), canonical) << name;
+    }
+    EXPECT_EQ(canonical_keyword("HIERARCH HIERARCH ESO DET NDIT"), "ESO DET NDIT");
+    EXPECT_EQ(canonical_hierarch_name("HIERARCH ESO DET NDIT"), "ESO DET NDIT");
+    EXPECT_EQ(canonical_keyword("HIERARCH HIERARCH"), "HIERARCH");
+}
+
 TEST(keyword_name, commentary_keywords_are_comment_history_and_the_blank_keyword)
 {
     EXPECT_TRUE(is_commentary_keyword("COMMENT"));

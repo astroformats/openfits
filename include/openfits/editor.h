@@ -34,7 +34,8 @@ enum class relayout : std::uint8_t
     /// Through a copy: the new file is written to a temporary file in the directory of the file, which replaces it by
     /// an atomic rename once it is complete, so that a failure, a cancellation or a crash leaves the old file or the
     /// new one, never a mix. An editor of a device has no directory: it writes the new file into memory, within
-    /// limits::max_allocation, and then over the device, which a failure from then on leaves damaged.
+    /// limits::max_allocation, and then over the device, which a failure from then on leaves damaged, and the editor
+    /// refuses every later change (errc::not_editable).
     safe_copy,
     /// In place: the units after the first change are moved within the file, in chunks, which needs no room for a copy,
     /// for files too large to copy. A failure, a cancellation or a crash while they move leaves the file damaged, and
@@ -134,7 +135,10 @@ struct row_append_options
 /// Such a commit rewrites the file as editor_options::relayout says, through a copy by default, which replaces the file
 /// at once. Writes in place are not atomic: a failure, a cancellation or a crash may leave some of them applied, which
 /// editor_options::atomic avoids by applying every commit through a copy. The pending changes stay when a commit
-/// throws, and the next commit applies them again, which completes what a failed commit left half done.
+/// throws, even once it has written the file, and the next commit applies them again, which completes what a failed
+/// commit left half done; but a commit that fails once it has begun to move the units within the file, in place or
+/// over a device, leaves the editor refusing every later change (errc::not_editable), since the units that it read no
+/// longer describe the file.
 ///
 /// A unit whose header or data change has its CHECKSUM and DATASUM updated as editor_options::update_checksums says,
 /// from the old and new bytes alone, with no pass over the unit; a unit that a commit builds again, such as a
@@ -312,7 +316,8 @@ public:
     /// @throws validation_error for a header that changes its structural keywords (errc::structural_keyword), or a card
     ///         that no record can hold, before anything is written.
     /// @throws usage_error (errc::invalid_argument) for a device that cannot change its size when the file must; and
-    ///         (errc::not_editable) after a failed commit in place that moved units, which left the file damaged.
+    ///         (errc::not_editable) after a failed commit that had begun to move the units of the file, which may have
+    ///         left it damaged.
     /// @throws io_error, or what a device throws, when the file cannot be written, read or replaced; io_error
     ///         (errc::end_of_data) when the commit would write data that a truncated file lacks, for a unit appended
     ///         after them or a write among them, which are not made up.

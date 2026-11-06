@@ -21,20 +21,26 @@ std::size_t start_of(const std::array<float, dither_count>& numbers, std::size_t
 
 const std::array<float, dither_count>& dither_numbers() noexcept
 {
-    // seed = a x seed mod m in doubles, which hold every product exactly, as the code of Appendix I computes it.
-    static const std::array<float, dither_count> numbers = [] {
-        constexpr double a = 16807.0;
-        constexpr double m = 2147483647.0;
+    // The numbers made in their storage, rather than in a frame of 40 KB of the stack that a copy would leave.
+    struct table
+    {
         std::array<float, dither_count> values{};
-        double seed = 1.0;
-        for (float& value : values) {
-            const double product = a * seed;
-            seed = product - (m * std::trunc(product / m));
-            value = static_cast<float>(seed / m);
+
+        // seed = a x seed mod m in doubles, which hold every product exactly, as the code of Appendix I computes it.
+        table() noexcept
+        {
+            constexpr double a = 16807.0;
+            constexpr double m = 2147483647.0;
+            double seed = 1.0;
+            for (float& value : values) {
+                const double product = a * seed;
+                seed = product - (m * std::trunc(product / m));
+                value = static_cast<float>(seed / m);
+            }
         }
-        return values;
-    }();
-    return numbers;
+    };
+    static const table numbers;
+    return numbers.values;
 }
 
 dither_walk::dither_walk(std::uint64_t row, std::uint32_t seed) noexcept

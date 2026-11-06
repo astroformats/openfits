@@ -279,6 +279,9 @@ std::optional<native_file> native_file::create_new(const std::string& path, std:
         const std::error_code error = last_error();
         fail(errc::open_failed, "cannot create a temporary file next to " + name, error);
     }
+    // Everything that the file needs is allocated before it exists, so that no allocation that fails can leave it
+    // behind.
+    auto list = std::make_unique<readers>();
     // DELETE access lets commit() rename the file and discard() delete it through the handle, which stays open until
     // then. FILE_SHARE_DELETE lets MoveFileExW() move the file while the handle is open. A link of any kind at the name
     // is not followed, so that it counts as a taken name, as O_EXCL makes it on POSIX systems: CreateFileW() created
@@ -294,7 +297,7 @@ std::optional<native_file> native_file::create_new(const std::string& path, std:
         }
         fail(errc::open_failed, "cannot create a temporary file next to " + name, error);
     }
-    return native_file(handle, std::move(name));
+    return native_file(handle, std::move(name), std::move(list));
 }
 
 std::optional<native_file> native_file::create_scratch(const std::string& path)
@@ -304,6 +307,10 @@ std::optional<native_file> native_file::create_scratch(const std::string& path)
         const std::error_code error = last_error();
         fail(errc::open_failed, "cannot create the temporary file " + path, error);
     }
+    // Everything that the file needs is allocated before it exists, so that no allocation that fails leaves its handle
+    // open.
+    std::string name = path;
+    auto list = std::make_unique<readers>();
     // The system deletes the file once its last handle is closed, by the process or at its end. Others may read it
     // while it exists, as a scanner of the system does, but only with FILE_SHARE_DELETE, which keeps the deletion
     // possible. A link at the name is not followed, and counts as a taken name, as in create_new().
@@ -318,7 +325,7 @@ std::optional<native_file> native_file::create_scratch(const std::string& path)
         }
         fail(errc::open_failed, "cannot create the temporary file " + path, error);
     }
-    return native_file(handle, path);
+    return native_file(handle, std::move(name), std::move(list));
 }
 
 std::uint64_t native_file::size() const

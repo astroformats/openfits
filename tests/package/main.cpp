@@ -30,7 +30,7 @@ int main()
             std::cerr << "the library reports " << linked << ", the package says " << EXPECTED_VERSION << '\n';
             return 1;
         }
-        const openfits::semantic_version numbers = openfits::version_numbers();
+        const openfits::version_info numbers = openfits::version_numbers();
         if (numbers.major != OPENFITS_VERSION_MAJOR || numbers.minor != OPENFITS_VERSION_MINOR ||
             numbers.patch != OPENFITS_VERSION_PATCH) {
             std::cerr << "the library reports other version numbers\n";

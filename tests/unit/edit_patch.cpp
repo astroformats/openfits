@@ -177,11 +177,22 @@ TEST(apply_patch, a_read_that_fails_leaves_the_overlay_and_the_sums_as_they_were
 
 TEST(changed_sum, bytes_that_sum_as_they_did_leave_the_sum_and_a_zero_needs_a_pass)
 {
+    EXPECT_EQ(openfits::detail::changed_sum(12345, {.before = 7, .after = 7}), 12345U);
+    // Zeros that stay zeros leave either zero as it was.
     EXPECT_EQ(openfits::detail::changed_sum(0, {.before = 0, .after = 0}), 0U);
-    EXPECT_EQ(openfits::detail::changed_sum(0xFFFFFFFFU, {.before = 7, .after = 7}), 0xFFFFFFFFU);
+    EXPECT_EQ(openfits::detail::changed_sum(0xFFFFFFFFU, {.before = 0, .after = 0}), 0xFFFFFFFFU);
     EXPECT_EQ(openfits::detail::changed_sum(0, {.before = 0, .after = 5}), 5U);
     // 5 taken away from 5: zero of one form or the other, which only the bytes tell.
     EXPECT_FALSE(openfits::detail::changed_sum(5, {.before = 5, .after = 0}).has_value());
+}
+
+// Changes folded from several writes sum alike before and after, the second write taking away what the first wrote,
+// and still turn data of zeros, whose sum is 0, into data that sum to 0xFFFFFFFF, or the reverse: the cell of a table
+// of zeros written with 127, and a row of -128 appended (found by fuzz_editor).
+TEST(changed_sum, bytes_that_sum_as_they_did_leave_a_zero_to_a_pass)
+{
+    EXPECT_FALSE(openfits::detail::changed_sum(0, {.before = 0xFFFFFF80U, .after = 0xFFFFFF80U}).has_value());
+    EXPECT_FALSE(openfits::detail::changed_sum(0xFFFFFFFFU, {.before = 7, .after = 7}).has_value());
 }
 
 TEST(region_patch, stores_the_values_of_a_region_in_the_order_of_the_data)

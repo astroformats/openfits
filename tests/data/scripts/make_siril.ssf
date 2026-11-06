@@ -1,15 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Ezequiel Ruiz
 #
-# The commands that make_siril.py runs with siril-cli in its working directory.
+# The commands that make_siril.py runs with siril-cli in its working directory, which holds the inputs and the ICC
+# profile of tests/data/icc. Siril keeps the settings of setext, set32bits and setcompress from one run to the next:
+# the script sets each before it saves, and leaves compression off.
 requires 1.4.0
 setext fits
+setcompress 0
 set32bits
 
-# E3: the pattern image saved as 32-bit floats, with an ICC profile.
+# E3: the pattern image saved as 32-bit floats, with the ICC profile of the samples.
 load pattern-f32
-icc_assign sRGB
+icc_assign openfits-gray.icc
 save e3-siril-f32
+
+# E5: the same image saved compressed with RICE_1 and a quantization of 16, which the name .fz asks of CFITSIO.
+setcompress 1 -type=rice 16
+save e5-siril-rice
+setcompress 0
 
 # E6: a CFA frame, saved as 16-bit integers with its Bayer keywords.
 set16bits

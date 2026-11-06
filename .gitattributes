@@ -7,4 +7,5 @@
 *.fz binary
 *.gz binary
 *.bin binary
+*.icc binary
 fuzz/seeds/** binary

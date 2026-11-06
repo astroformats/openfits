@@ -25,13 +25,13 @@
 namespace openfits {
 
 /// The three numbers of a version, ordered as Semantic Versioning orders them.
-struct semantic_version
+struct version_info
 {
     int major = 0;
     int minor = 0;
     int patch = 0;
 
-    friend auto operator<=>(const semantic_version&, const semantic_version&) = default;
+    friend auto operator<=>(const version_info&, const version_info&) = default;
 };
 
 /// Version of the linked library as "major.minor.patch". The ABI holds within a minor version, so a program runs with
@@ -42,6 +42,6 @@ struct semantic_version
 [[nodiscard]] OPENFITS_API std::string_view version() noexcept;
 
 /// Version of the linked library as its three numbers, those of version().
-[[nodiscard]] OPENFITS_API semantic_version version_numbers() noexcept;
+[[nodiscard]] OPENFITS_API version_info version_numbers() noexcept;
 
 } // namespace openfits

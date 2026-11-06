@@ -165,7 +165,13 @@ bool unit_walk::walk_next()
     const std::uint64_t used = std::min(diagnostics_, limits_.max_diagnostics);
     diagnostic_log log(strict_,
                        limits_.max_diagnostics == 0 ? 0 : std::max<std::uint64_t>(1, limits_.max_diagnostics - used));
-    unit_header read = read_header(source_, offset, index, index == 0 ? "SIMPLE" : "XTENSION", limits_, log, window_);
+    // What the limit of the headers of the file leaves for this one, which is refused beyond it before it is parsed.
+    const std::uint64_t headers_left =
+        limits_.max_total_header_bytes == 0
+            ? std::numeric_limits<std::uint64_t>::max()
+            : limits_.max_total_header_bytes - std::min(header_bytes_, limits_.max_total_header_bytes);
+    unit_header read =
+        read_header(source_, offset, index, index == 0 ? "SIMPLE" : "XTENSION", limits_, log, window_, headers_left);
     if (read.outcome == header_outcome::not_a_header) {
         if (index == 0) {
             throw invalid_data_error(errc::not_a_fits_file,
@@ -186,13 +192,6 @@ bool unit_walk::walk_next()
         return false;
     }
     const std::optional<std::uint64_t> header_bytes = add(header_bytes_, read.size);
-    if (limits_.max_total_header_bytes != 0 && (!header_bytes || *header_bytes > limits_.max_total_header_bytes)) {
-        stop(errc::header_too_large, "",
-             "the headers of the file are longer than the limit of " + std::to_string(limits_.max_total_header_bytes) +
-                 " bytes",
-             {.hdu = index, .offset = offset});
-        return false;
-    }
 
     header cards(std::move(read.cards));
     check_repeated_keywords(cards, offset, index, log);

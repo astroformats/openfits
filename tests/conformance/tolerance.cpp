@@ -367,6 +367,15 @@ std::vector<tolerance_row> rows()
     add("checksum_without_quotes", image_with({card_record("CHECKSUM", "12")}), 0, errc::reserved_keyword,
         severity::warning, "4.4.2.7",
         [](const reader& input) { EXPECT_EQ(input.verify(0).checksum, openfits::checksum_state::invalid); });
+    // A value field that holds none of the forms of the standard, as a damaged record leaves it: a DATASUM that no data
+    // match, and a CHECKSUM checked by the sum of its unit, so that damage to the record itself is found (the
+    // differential run of Phase 12, where both read as absent).
+    add("datasum_of_no_form", image_with({card_record("DATASUM", "12,5")}), 0, errc::reserved_keyword,
+        severity::warning, "4.4.2.7",
+        [](const reader& input) { EXPECT_EQ(input.verify(0).datasum, openfits::checksum_state::invalid); });
+    add("checksum_of_no_form", image_with({card_record("CHECKSUM", "12,5")}), 0, errc::reserved_keyword,
+        severity::warning, "4.4.2.7",
+        [](const reader& input) { EXPECT_EQ(input.verify(0).checksum, openfits::checksum_state::invalid); });
 
     // Old compressed images, read as CFITSIO reads them (standard §10.1): an image of 4 x 2 values in tiles of a row,
     // each tile compressed alone in the heap.
