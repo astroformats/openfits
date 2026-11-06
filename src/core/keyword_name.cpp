@@ -28,17 +28,19 @@ bool is_standard_keyword(std::string_view name) noexcept
 
 std::string canonical_keyword(std::string_view name)
 {
-    name = trim_spaces(name);
-    if (name.size() > hierarch_prefix.size() && name[hierarch_prefix.size()] == ' ' &&
-        equal_ignoring_case(name.substr(0, hierarch_prefix.size()), hierarch_prefix)) {
-        name = name.substr(hierarch_prefix.size());
-    }
     return canonical_hierarch_name(name);
 }
 
 std::string canonical_hierarch_name(std::string_view name)
 {
+    // Every prefix HIERARCH, and the spaces after it, as often as the name starts with one: a hierarchical name that
+    // starts with HIERARCH again has the canonical name of the rest, so that a canonical name is its own, and a lookup,
+    // which makes the name it is given canonical, finds the card whatever its record held. HIERARCH alone stays.
     name = trim_spaces(name);
+    while (name.size() > hierarch_prefix.size() && name[hierarch_prefix.size()] == ' ' &&
+           equal_ignoring_case(name.substr(0, hierarch_prefix.size()), hierarch_prefix)) {
+        name = trim_spaces(name.substr(hierarch_prefix.size()));
+    }
     std::string canonical;
     canonical.reserve(name.size());
     for (const char c : name) {

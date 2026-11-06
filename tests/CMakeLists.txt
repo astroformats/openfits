@@ -55,6 +55,7 @@ openfits_add_test_executable(openfits_tests
     samples/checksums.cpp
     samples/gzip.cpp
     samples/headers.cpp
+    samples/icc_profile.cpp
     samples/images.cpp
     samples/sample_catalog.cpp
     samples/tables.cpp
@@ -125,6 +126,25 @@ openfits_add_test_executable(openfits_tests
     unit/write_validation.cpp
     unit/writer.cpp)
 
+# The tests that count the memory that code asks for, or make its allocations fail, through an operator new that their
+# executable puts in place of the standard library's for every test that it runs. In openfits_tests it would take from
+# the whole suite the checks of a sanitizer's own allocator, such as the new-delete mismatches of AddressSanitizer.
+# ThreadSanitizer defines operator new in a runtime library that Clang links whole, so that no executable can replace
+# it: a build with ThreadSanitizer has no allocation tests.
+if("thread" IN_LIST OPENFITS_SANITIZE)
+    set(allocation_tests OFF)
+else()
+    set(allocation_tests ON)
+endif()
+if(allocation_tests)
+    openfits_add_test_executable(openfits_allocation_tests
+        allocation/allocations.cpp
+        allocation/editor.cpp
+        allocation/reader.cpp
+        allocation/writer.cpp
+        support/temp_directory.cpp)
+endif()
+
 # The suites of concurrency/, conformance/ and samples/ are named after their directory, which gives them their label.
 # The name of a parameterized suite follows the name of its instantiation and a slash.
 gtest_discover_tests(openfits_tests
@@ -137,6 +157,12 @@ foreach(label concurrency conformance samples)
         TEST_FILTER "${label}_*:*/${label}_*"
         PROPERTIES LABELS ${label})
 endforeach()
+# The tests of memory are unit tests.
+if(allocation_tests)
+    gtest_discover_tests(openfits_allocation_tests
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES LABELS unit)
+endif()
 
 # The tests that take a gigabyte of memory also have the label slow. CTest knows them only once it has discovered them,
 # and gtest_discover_tests() splits a list of labels into arguments, so a file that CTest includes after the discovered

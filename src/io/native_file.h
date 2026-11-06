@@ -164,6 +164,12 @@ private:
             throw;
         }
     }
+
+    // A file whose list of readers was made before it: create_new() makes the list before the file, since closing the
+    // handle of a new file leaves the file behind.
+    native_file(handle_type handle, std::string name, std::unique_ptr<readers> list) noexcept
+        : handle_(handle), name_(std::move(name)), readers_(std::move(list))
+    {}
 #else
     native_file(handle_type handle, std::string name) noexcept : handle_(handle), name_(std::move(name)) {}
 #endif

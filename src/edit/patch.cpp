@@ -298,8 +298,10 @@ std::uint32_t overlaid_sum(const data_reader& read, const byte_overlay& overlay,
 
 std::optional<std::uint32_t> changed_sum(std::uint32_t before, const sum_change& change) noexcept
 {
-    // Bytes that sum as they did leave the sum as it was, a zero of either form included.
-    if (change.before == change.after) {
+    // Zeros that stay zeros leave the sum as it was, a zero of either form included. Other bytes that sum as they did
+    // leave a sum other than zero as it was, which the difference below gives, and a zero to a pass: changes folded
+    // from several writes can turn data of zeros into data that sum to 0xFFFFFFFF, or the reverse.
+    if (change.before == 0 && change.after == 0) {
         return before;
     }
     // The difference added as the complement of what is taken away (standard Appendix J.4).

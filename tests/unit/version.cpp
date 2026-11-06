@@ -23,7 +23,7 @@ TEST(version, string_is_made_of_the_numeric_macros)
 
 TEST(version, numbers_are_those_of_the_macros)
 {
-    const openfits::semantic_version numbers = openfits::version_numbers();
+    const openfits::version_info numbers = openfits::version_numbers();
 
     EXPECT_EQ(numbers.major, OPENFITS_VERSION_MAJOR);
     EXPECT_EQ(numbers.minor, OPENFITS_VERSION_MINOR);
@@ -33,12 +33,10 @@ TEST(version, numbers_are_those_of_the_macros)
 // Major, then minor, then patch, as Semantic Versioning orders versions.
 TEST(version, numbers_order_as_semantic_versioning_does)
 {
-    using openfits::semantic_version;
+    using openfits::version_info;
 
-    EXPECT_LT((semantic_version{.major = 0, .minor = 9, .patch = 9}), (semantic_version{.major = 1}));
-    EXPECT_LT((semantic_version{.major = 1, .minor = 1}), (semantic_version{.major = 1, .minor = 2}));
-    EXPECT_LT((semantic_version{.major = 1, .minor = 2, .patch = 3}),
-              (semantic_version{.major = 1, .minor = 2, .patch = 4}));
-    EXPECT_EQ((semantic_version{.major = 1, .minor = 2, .patch = 3}),
-              (semantic_version{.major = 1, .minor = 2, .patch = 3}));
+    EXPECT_LT((version_info{.major = 0, .minor = 9, .patch = 9}), (version_info{.major = 1}));
+    EXPECT_LT((version_info{.major = 1, .minor = 1}), (version_info{.major = 1, .minor = 2}));
+    EXPECT_LT((version_info{.major = 1, .minor = 2, .patch = 3}), (version_info{.major = 1, .minor = 2, .patch = 4}));
+    EXPECT_EQ((version_info{.major = 1, .minor = 2, .patch = 3}), (version_info{.major = 1, .minor = 2, .patch = 3}));
 }

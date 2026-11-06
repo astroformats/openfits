@@ -345,11 +345,12 @@ TEST(record, a_hierarch_record_has_the_canonical_name)
     EXPECT_TRUE(departures(lowercase, {errc::invalid_keyword}));
     EXPECT_EQ(lowercase.value.keyword(), "ESO DET DIT");
 
-    // The prefix of the record is not part of the name, even when the name starts with HIERARCH too.
+    // No prefix is part of the name, even when the name starts with HIERARCH again: the canonical name is its own, so
+    // that a lookup by the keyword of the card finds it.
     const reading twice = read("HIERARCH HIERARCH X = 5");
-    EXPECT_EQ(twice.value.keyword(), "HIERARCH X");
-    EXPECT_EQ(card("HIERARCH HIERARCH X", 5).keyword(), "HIERARCH X");
-    EXPECT_EQ(card::parse(write_record(card("HIERARCH HIERARCH X", 5), {.hierarch = true})).keyword(), "HIERARCH X");
+    EXPECT_EQ(twice.value.keyword(), "X");
+    EXPECT_EQ(card("HIERARCH HIERARCH X", 5).keyword(), "X");
+    EXPECT_EQ(card::parse(write_record(card("HIERARCH HIERARCH X", 5), {.hierarch = true})).keyword(), "X");
 
     // Without an equals sign, the record is commentary: bytes 9 to 80 are its text.
     const reading without_value = read("HIERARCH ESO DET DIT");

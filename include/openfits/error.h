@@ -134,8 +134,8 @@ enum class errc
 
     not_editable, ///< A file or a part of one that the editor cannot change as asked: a gzip-compressed file, the
                   ///< fields of a compressed table or of variable-length arrays, which a rewrite of the table changes,
-                  ///< tiles of a compressed image that the library cannot encode again, or a file that a failed
-                  ///< commit in place left damaged.
+                  ///< tiles of a compressed image that the library cannot encode again, or a file that a commit
+                  ///< failed to rewrite once it had begun to move its units.
 };
 
 /// Where in a file a problem was found. Empty or absent members are unknown or do not apply.

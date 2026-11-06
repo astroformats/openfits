@@ -20,12 +20,12 @@ namespace openfits::detail {
 [[nodiscard]] bool is_standard_keyword(std::string_view name) noexcept;
 
 /// The canonical form of a keyword name, which lookups use: without leading and trailing spaces, without the prefix
-/// HIERARCH of the convention and the spaces after it, with every run of spaces made one space, in upper case. The
-/// name HIERARCH alone stays.
+/// HIERARCH of the convention and the spaces after it, as often as the name starts with one, with every run of spaces
+/// made one space, in upper case. The name HIERARCH alone stays, and a canonical name is its own canonical form.
 [[nodiscard]] std::string canonical_keyword(std::string_view name);
 
 /// The canonical form of the name that a record of the HIERARCH convention holds after its prefix: as
-/// canonical_keyword() makes it, but for the prefix, which the record already had.
+/// canonical_keyword() makes it, a name that starts with HIERARCH again included.
 [[nodiscard]] std::string canonical_hierarch_name(std::string_view name);
 
 /// True for the canonical names of the commentary keywords of standard §4.4.2.4: COMMENT, HISTORY and the blank

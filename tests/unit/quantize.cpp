@@ -217,9 +217,37 @@ TEST(quantize, refuses_tiles_it_cannot_quantize)
                           quantize_request{.level = 1.5, .method = quantization::subtractive_dither_2}, codes)
                      .has_value());
     EXPECT_FALSE(quantize(top, 100, 1, false, quantize_request{.level = -1e37}, codes).has_value());
-    EXPECT_EQ(codes, std::vector<std::int32_t>(100, 7));
     // A constant tile under a negative level is quantized.
     EXPECT_TRUE(quantize(std::vector<float>(100, 5.0F), 100, 1, false, quantize_request{.level = -0.5}, codes));
+}
+
+// The zero point of a tile without nulls whose range takes more than 2^31 levels is the mean of its extremes in the
+// precision of the pixels, as CFITSIO takes it, which may lie so far from their middle that the codes of one end leave
+// 32-bit integers, or reach those of nulls and zeros: such a tile is not quantized, since its codes would restore other
+// values. Here the sum of the extremes, 28422671 rounded to a float, puts the zero point half a unit off, 2^27 levels
+// at a spacing of 2^-28, so that the larger value would take the code 2^31 (found by fuzz_quantize, whose input had
+// these values times 2^27).
+TEST(quantize, refuses_tiles_whose_codes_would_restore_other_values)
+{
+    std::vector<std::int32_t> codes(2);
+    for (const quantization method : {quantization::no_dither, quantization::subtractive_dither_1}) {
+        EXPECT_FALSE(quantize(std::vector<float>{-14211343.0F, -14211328.0F}, 2, 1, false,
+                              quantize_request{.level = -0x1p-28, .method = method}, codes)
+                         .has_value())
+            << static_cast<int>(method);
+    }
+    // With a null, the zero point puts the smaller value just above the reserved integers, and the codes hold both.
+    std::vector<std::int32_t> three(3);
+    const std::vector<float> with_null{-14211343.0F, -14211328.0F, std::numeric_limits<float>::quiet_NaN()};
+    const std::optional<quantized_scaling> scaling =
+        quantize(with_null, 3, 1, true, quantize_request{.level = -0x1p-28, .method = quantization::no_dither}, three);
+    ASSERT_TRUE(scaling.has_value());
+    if (scaling) {
+        const std::vector<float> back = restored(three, *scaling, quantization::no_dither);
+        EXPECT_EQ(back[0], with_null[0]);
+        EXPECT_EQ(back[1], with_null[1]);
+        EXPECT_TRUE(std::isnan(back[2]));
+    }
 }
 
 TEST(quantize, a_tile_of_nulls_is_all_null)

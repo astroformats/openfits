@@ -82,9 +82,9 @@ struct quantized_scaling
 };
 
 /// Quantizes the values of a tile, prepared, into codes (Eq. 12 and 13), with -2147483647 for null pixels and, under
-/// SUBTRACTIVE_DITHER_2, -2147483646 for the pixels that are exactly 0. Nothing, and codes untouched, when the tile
-/// cannot be quantized: a tile of one pixel, one without noise for a positive level, or one whose range is beyond
-/// 32-bit integers.
+/// SUBTRACTIVE_DITHER_2, -2147483646 for the pixels that are exactly 0. Nothing, and codes unspecified, when the tile
+/// cannot be quantized: a tile of one pixel, one without noise for a positive level, one whose range is beyond 32-bit
+/// integers, or one in which a value would take a code beyond them or one of the integers of nulls and zeros.
 [[nodiscard]] std::optional<quantized_scaling> quantize(std::span<const float> values, std::size_t nx, std::size_t ny,
                                                         bool nulls, const quantize_request& request,
                                                         std::span<std::int32_t> codes);

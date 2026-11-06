@@ -384,8 +384,9 @@ std::vector<sample> make_samples()
     e1.id = "E1";
     e1.file = "pixinsight/e1-pixinsight-u16.fits";
     e1.content = "the pattern written by PixInsight as BITPIX 16 with BZERO 32768, with OBJECT, EXPTIME, a HISTORY "
-                 "record, and its own keywords: PROGRAM, HDUNAME, ROWORDER and COMMENT records. The FITS module "
-                 "writes no ICCProfile unit in automation mode";
+                 "record, and its own keywords: PROGRAM, HDUNAME, ROWORDER and COMMENT records. Its FITS module "
+                 "stores no ICC profile (canStoreICCProfiles is false in 1.9.6) and reads none from the ICCProfile "
+                 "unit of E3";
     e1.producer = "PixInsight 1.9.5 build 1706, FITS module 1.2.3";
     e1.procedure = "tests/data/scripts/make_pixinsight.js, run with PixInsight 1.9.5; E2 is from a run with 1.9.6";
     e1.units.push_back(pattern_unit(2, numeric_type::uint16, "openfits_sample_e1"));
@@ -406,12 +407,33 @@ std::vector<sample> make_samples()
     e3.id = "E3";
     e3.file = "siril/e3-siril-f32.fits";
     e3.content = "the pattern saved by Siril as BITPIX -32, with PROGRAM, MIPS-FLO, DATE, the ROWORDER of its input, "
-                 "a HISTORY record of the sRGB profile assigned, and the ICCProfile unit of the profile, 624 bytes";
+                 "a HISTORY record of the ICC profile assigned, and the ICCProfile unit of that profile: an IMAGE "
+                 "extension of BITPIX 8 and NAXIS 1, whose data are the 380 bytes of the profile as they are";
     e3.producer = "Siril 1.4.4";
     e3.procedure = "tests/data/scripts/make_siril.py with make_siril.ssf";
+    e3.set_by_hand = "the ICC profile, tests/data/icc/openfits-gray.icc of make_icc.py, which icc_assign gives";
     e3.units.push_back(pattern_unit(4, numeric_type::float32));
-    e3.units.push_back(unit_of(hdu_kind::image, 624, "ICCProfile"));
+    e3.units.push_back(unit_of(hdu_kind::image, 380, "ICCProfile"));
     add(std::move(e3));
+
+    sample e5;
+    e5.id = "E5";
+    e5.file = "siril/e5-siril-rice.fits.fz";
+    e5.content = "E3 saved by Siril compressed with RICE_1 and a quantization of 16 under SUBTRACTIVE_DITHER_2, the "
+                 "tiles that do not quantize in GZIP_COMPRESSED_DATA, after a primary HDU without data; its "
+                 "ICCProfile unit is an IMAGE extension of the 380 bytes of the profile whose header holds the "
+                 "keywords of a compressed image too, TFIELDS to ZVAL2, and an NAXIS2 beyond its NAXIS of 1";
+    e5.producer = "Siril 1.4.4";
+    e5.procedure = "tests/data/scripts/make_siril.py with make_siril.ssf (setcompress 1 -type=rice 16)";
+    e5.set_by_hand = "the ICC profile of E3; ZDITHER0, which Siril draws at random";
+    e5.units.push_back(unit_of(hdu_kind::primary, 0));
+    sample_unit e5_image = image_unit(hdu_kind::compressed_image, 4116, numeric_type::float32, {width, height});
+    e5_image.tolerance = 1e-6;
+    e5.units.push_back(std::move(e5_image));
+    e5.units.push_back(unit_of(hdu_kind::image, 380, "ICCProfile"));
+    // The header of its ICCProfile unit: the NAXIS2 of a table ignored, and PCOUNT and GCOUNT a record late.
+    e5.departures = {errc::invalid_structure, errc::keyword_order};
+    add(std::move(e5));
 
     sample e4;
     e4.id = "E4";

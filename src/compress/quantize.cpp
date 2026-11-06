@@ -370,7 +370,7 @@ std::int32_t nearest(double value) noexcept
 {
     const double shifted = value >= 0.0 ? value + 0.5 : value - 0.5;
     // Within the codes of a tile that passed the range check; beyond them only for an extreme tile, which C leaves
-    // undefined and x86-64 makes -2^31.
+    // undefined and x86-64 makes -2^31, and which is then not quantized.
     if (std::isnan(shifted) || shifted <= -2147483649.0 || shifted >= 2147483648.0) {
         return std::numeric_limits<std::int32_t>::min();
     }
@@ -454,6 +454,8 @@ std::optional<quantized_scaling> quantize_tile(std::span<const T> values, std::s
     const bool dithered = request.method != quantization::no_dither;
     const bool keep_zeros = request.method == quantization::subtractive_dither_2;
     dither_walk walk(request.row, request.seed);
+    // The smallest code of a value. A code beyond 32 bits is -2^31.
+    std::int32_t smallest = std::numeric_limits<std::int32_t>::max();
     for (std::size_t i = 0; i < count; ++i) {
         const T pixel = values[i];
         const float random = dithered ? walk.next() : 0.0F;
@@ -467,13 +469,23 @@ std::optional<quantized_scaling> quantize_tile(std::span<const T> values, std::s
         }
         const double offset = static_cast<double>(pixel) - zero;
         const double scaled = offset / delta;
+        std::int32_t code = 0;
         if (!dithered) {
-            codes[i] = nearest(scaled);
-            continue;
+            code = nearest(scaled);
+        } else {
+            const double dithered_value = scaled + static_cast<double>(random);
+            const double centred = dithered_value - 0.5;
+            code = nearest(centred);
         }
-        const double dithered_value = scaled + static_cast<double>(random);
-        const double centred = dithered_value - 0.5;
-        codes[i] = nearest(centred);
+        codes[i] = code;
+        smallest = std::min(smallest, code);
+    }
+    // A tile in which a value takes a code beyond 32 bits, or the integer of nulls or of zeros, is not quantized: the
+    // code would restore another value, as those that CFITSIO writes for it do. The zero point of a tile without nulls
+    // whose range takes more than 2^31 levels is the mean of its extremes in the precision of the pixels, which can lie
+    // far enough from their middle for the codes of one end to leave 32 bits.
+    if (smallest <= quantized_zero) {
+        return std::nullopt;
     }
     return quantized_scaling{.scale = delta, .zero = zero};
 }

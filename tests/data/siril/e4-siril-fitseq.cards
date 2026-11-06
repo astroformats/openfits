@@ -11,7 +11,7 @@
 0	MIPS-FLO	float	0.0	Lower visualization cutoff
 0	PROGRAM	str	Siril 1.4.4	Software that created this HDU
 0	FILENAME	str	frame_1.fits	
-0	DATE	str	2026-10-31T08:14:30	UTC date that FITS file was created
+0	DATE	str	2026-11-06T07:39:47	UTC date that FITS file was created
 1	XTENSION	str	IMAGE	IMAGE extension
 1	BITPIX	int	-32	number of bits per data pixel
 1	NAXIS	int	2	number of data axes
@@ -24,7 +24,7 @@
 1	MIPS-FLO	float	0.0	Lower visualization cutoff
 1	PROGRAM	str	Siril 1.4.4	Software that created this HDU
 1	FILENAME	str	frame_2.fits	
-1	DATE	str	2026-10-31T08:14:30	UTC date that FITS file was created
+1	DATE	str	2026-11-06T07:39:47	UTC date that FITS file was created
 2	XTENSION	str	IMAGE	IMAGE extension
 2	BITPIX	int	-32	number of bits per data pixel
 2	NAXIS	int	2	number of data axes
@@ -37,4 +37,4 @@
 2	MIPS-FLO	float	0.0	Lower visualization cutoff
 2	PROGRAM	str	Siril 1.4.4	Software that created this HDU
 2	FILENAME	str	frame_3.fits	
-2	DATE	str	2026-10-31T08:14:30	UTC date that FITS file was created
+2	DATE	str	2026-11-06T07:39:47	UTC date that FITS file was created

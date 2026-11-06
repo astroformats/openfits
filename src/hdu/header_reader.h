@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -30,7 +31,7 @@ enum class header_outcome : std::uint8_t
 {
     read,         ///< A header.
     not_a_header, ///< The first record is not the keyword that starts a header there.
-    too_large,    ///< A header longer than limits::max_header_bytes, which an error in the log reports.
+    too_large,    ///< A header beyond the limits of the headers, which an error in the log reports.
 };
 
 /// A header as the walk reads it from the blocks of its unit.
@@ -85,11 +86,14 @@ private:
 /// first_keyword with a value: records of 80 bytes up to END, the record whose first eight bytes are END and spaces
 /// (standard §4.4.1), four blocks at a time and then as many as were read so far, through window, or seen in the
 /// content of the source in memory. The departures of its records and of its blocks go to log, with the unit hdu and
-/// the offset of each record in their context.
+/// the offset of each record in their context. headers_left is what limits::max_total_header_bytes leaves of the
+/// headers of the file, the largest value for no limit: a header longer than it, or than limits::max_header_bytes, is
+/// refused once that many of its bytes are read, before a card is parsed.
 /// @throws the exceptions of the source, and of log in strict mode.
 [[nodiscard]] unit_header read_header(const thread_safe_source& source, std::uint64_t offset, std::uint64_t hdu,
                                       std::string_view first_keyword, const limits& limits, diagnostic_log& log,
-                                      read_window& window);
+                                      read_window& window,
+                                      std::uint64_t headers_left = std::numeric_limits<std::uint64_t>::max());
 
 /// Records to log a warning for each card with a value whose keyword has a value in an earlier card (standard
 /// §4.1.2.3), in the order of the cards, of the header of the unit hdu read at offset: the cards that read_header()

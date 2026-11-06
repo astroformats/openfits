@@ -272,9 +272,11 @@ recorded_datasum datasum_of(const header& cards)
     }
     const card_value& value = cards[*position].value();
     switch (value.kind()) {
-    case value_kind::none:
     case value_kind::undefined:
         return {};
+    case value_kind::none:
+        // A value field of none of the forms of the standard, as a damaged record leaves it, which no data match.
+        return {.known = true};
     case value_kind::string: {
         const std::string text = string_of(cards, *position);
         if (trim_spaces(text).empty()) {
@@ -308,7 +310,9 @@ bool has_checksum(const header& cards)
     if (kind == value_kind::string) {
         return !trim_spaces(string_of(cards, *position)).empty();
     }
-    return kind != value_kind::none && kind != value_kind::undefined;
+    // Any other value is checked by the sum of the unit, a value field of none of the forms of the standard included,
+    // so that damage to the record itself is found.
+    return kind != value_kind::undefined;
 }
 
 void check_checksum_keywords(const header& cards, std::optional<std::uint32_t> header_sum, std::uint64_t hdu,
