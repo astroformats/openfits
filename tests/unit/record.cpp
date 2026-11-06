@@ -6,17 +6,22 @@
 #include <openfits/card.h>
 #include <openfits/error.h>
 
+#include "core/value_text.h"
 #include "header/long_string.h"
+#include "support/sequence.h"
 #include "support/throws.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -226,6 +231,42 @@ TEST(record, a_value_of_no_form_runs_to_the_slash_of_its_comment)
     EXPECT_TRUE(departures(logical, {errc::invalid_comment}));
     EXPECT_TRUE(logical.value.value().get<bool>());
     EXPECT_EQ(logical.value.comment(), "and more");
+}
+
+// Reals of up to 16 significant digits and of a decimal exponent up to 22 in magnitude convert by one operation on
+// exact doubles, the others by the conversion of the standard library: both give the double nearest to the decimal
+// value, as strtod() does, on both sides of those bounds, with E or D as the exponent letter.
+TEST(record, reads_reals_as_the_nearest_double_on_either_side_of_the_exact_conversion)
+{
+    openfits::test::splitmix64 random(42);
+    for (int i = 0; i < 100'000; ++i) {
+        const std::uint64_t r = random.next();
+        const std::uint64_t digits = 1 + (r % 19);
+        const std::uint64_t point = (r >> 8U) % (digits + 1);
+        std::string text = (r >> 24U) % 2 == 0 ? "" : "-";
+        for (std::uint64_t d = 0; d < digits; ++d) {
+            if (d == point) {
+                text += '.';
+            }
+            text += static_cast<char>('0' + (random.next() % 10));
+        }
+        if (point == digits) {
+            text += '.';
+        }
+        if ((r >> 25U) % 2 == 1) {
+            text += (r >> 26U) % 2 == 0 ? 'E' : 'D';
+            text += std::to_string(static_cast<int>((r >> 32U) % 61) - 30);
+        }
+        std::string reference = text;
+        std::ranges::replace(reference, 'D', 'E');
+        const double expected = std::strtod(reference.c_str(), nullptr);
+        const std::optional<double> read = openfits::detail::real_value(text);
+        if (!read) {
+            ADD_FAILURE() << text << " read as no real";
+            continue;
+        }
+        EXPECT_EQ(std::bit_cast<std::uint64_t>(*read), std::bit_cast<std::uint64_t>(expected)) << text;
+    }
 }
 
 TEST(record, numbers_beyond_their_range_keep_their_text)

@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <span>
 #include <sstream>
@@ -77,6 +78,21 @@ TEST(concurrency_io, file_source)
 
     EXPECT_EQ(read_from_threads(direct, data), 0);
     EXPECT_EQ(read_from_threads(wrapped, data), 0);
+}
+
+// Concurrent reads of one file take handles of their own on Windows, which opens a file that another program deleted
+// no more: such reads go through the handle of the source, one at a time, and read the same bytes.
+TEST(concurrency_io, file_source_of_a_file_deleted_while_it_is_open)
+{
+    const temp_directory directory;
+    const std::vector<std::byte> data = pattern(std::size_t{1} << 20);
+    openfits::test::write_file(directory.path() / "data.bin", data);
+    const openfits::file_source source(directory.file("data.bin"));
+    std::vector<std::byte> first(16);
+    source.read(0, first);
+
+    std::filesystem::remove(directory.path() / "data.bin");
+    EXPECT_EQ(read_from_threads(source, data), 0);
 }
 
 TEST(concurrency_io, memory_source)

@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(openfits
-    VERSION 0.5.0
+    VERSION 0.6.0
     DESCRIPTION "C++20 library for reading and writing FITS files"
     HOMEPAGE_URL "https://github.com/astroformats/openfits"
     LANGUAGES CXX)
@@ -32,6 +32,8 @@ option(OPENFITS_BUILD_BENCHMARKS "Build the benchmarks (Google Benchmark)" OFF)
 option(OPENFITS_BUILD_DOCS "Add the docs target that builds the API documentation with Doxygen" OFF)
 option(OPENFITS_INSTALL "Generate the install rules" ${PROJECT_IS_TOP_LEVEL})
 option(OPENFITS_WITH_TBB "Use oneTBB for parallel work" OFF)
+option(OPENFITS_ENABLE_SIMD
+    "Use the SIMD kernels of byte swapping, shuffling and checksums (SSE2, and AVX2 where the processor has it, on x86-64); the scalar code is always built" ON)
 option(OPENFITS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(OPENFITS_HARDENING "Compile with the hardening flags of the CI and release builds" OFF)
 set(OPENFITS_SANITIZE "" CACHE STRING

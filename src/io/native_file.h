@@ -5,10 +5,16 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <utility>
+
+#if defined(_WIN32)
+#include <mutex>
+#include <vector>
+#endif
 
 // The platform layer of file_source, file_sink and file_device: native_file_win32.cpp or native_file_posix.cpp. Paths
 // are UTF-8 and valid, which the public classes check. Every failure is an io_error whose message names the file.
@@ -72,6 +78,10 @@ public:
 
     native_file(native_file&& other) noexcept
         : handle_(std::exchange(other.handle_, closed_handle)), name_(std::move(other.name_))
+#if defined(_WIN32)
+          ,
+          readers_(std::move(other.readers_))
+#endif
     {}
 
     native_file& operator=(native_file&& other) noexcept
@@ -80,6 +90,9 @@ public:
             reset();
             handle_ = std::exchange(other.handle_, closed_handle);
             name_ = std::move(other.name_);
+#if defined(_WIN32)
+            readers_ = std::move(other.readers_);
+#endif
         }
         return *this;
     }
@@ -101,7 +114,8 @@ public:
     [[nodiscard]] std::uint64_t size() const;
 
     /// Fills destination with the bytes at offset, in calls of the system of at most transfer bytes, which is not zero.
-    /// A file that ends first is an io_error with errc::end_of_data.
+    /// A file that ends first is an io_error with errc::end_of_data. Any number of threads may read at once, and their
+    /// reads run at once on every system.
     void read_at(std::uint64_t offset, std::span<std::byte> destination, std::size_t transfer = max_transfer) const;
 
     /// Writes data at offset, in calls of the system of at most transfer bytes, which is not zero.
@@ -128,7 +142,31 @@ public:
     void reset() noexcept;
 
 private:
+#if defined(_WIN32)
+    // The handles of the reads that run while another one does. Windows runs the calls on a synchronous handle one at a
+    // time, so that a read that would wait for another one takes a handle of its own to the same file, from
+    // ReOpenFile(), which it leaves for the next ones; they close with the file.
+    struct readers
+    {
+        std::mutex mutex;
+        bool primary_busy = false;
+        std::vector<handle_type> idle;
+    };
+    class reading;
+
+    // The handle is the object's from the start: a list of readers that cannot be made closes it.
+    native_file(handle_type handle, std::string name) : handle_(handle), name_(std::move(name))
+    {
+        try {
+            readers_ = std::make_unique<readers>();
+        } catch (...) {
+            reset();
+            throw;
+        }
+    }
+#else
     native_file(handle_type handle, std::string name) noexcept : handle_(handle), name_(std::move(name)) {}
+#endif
 
     // Opens an existing regular file with the given access, after the checks of open_for_reading().
     [[nodiscard]] static native_file open_existing(const std::string& path, bool writable);
@@ -138,6 +176,9 @@ private:
 
     handle_type handle_;
     std::string name_;
+#if defined(_WIN32)
+    std::unique_ptr<readers> readers_;
+#endif
 };
 
 } // namespace openfits::detail

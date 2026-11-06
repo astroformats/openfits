@@ -40,6 +40,11 @@ concept header_value =
 #pragma warning(disable : 4251)
 #endif
 
+namespace detail {
+struct header_access;
+struct keyword_table;
+} // namespace detail
+
 /// The keyword records of a header (standard §4) in their order, the END record excluded, each a card.
 ///
 /// A card read from a file keeps the record it was read from, so that a header is written back unchanged; a card that
@@ -47,8 +52,8 @@ concept header_value =
 /// §4.2.1.2) is a card for each record, as in the file, and value() and find() give the string they make together.
 ///
 /// Lookups take a keyword in any case, with or without the HIERARCH prefix, and find the first card of that keyword;
-/// a header is indexed by keyword, so that a lookup takes a time logarithmic in its size. The blank cards that end a
-/// header are its fill space (standard §4.4.2.4), which free_cards() counts and which a card added by append() or
+/// a header is indexed by keyword, so that a lookup takes about the same time whatever its size. The blank cards that
+/// end a header are its fill space (standard §4.4.2.4), which free_cards() counts and which a card added by append() or
 /// set() takes the place of.
 ///
 /// Values convert as the table of value() says. A header is a value: copies are independent, and any number of threads
@@ -242,6 +247,8 @@ public:
     }
 
 private:
+    friend struct detail::header_access;
+
     template <typename T> [[nodiscard]] std::optional<T> typed(std::string_view keyword, bool required) const
     {
         if constexpr (std::same_as<T, bool>) {
@@ -294,13 +301,11 @@ private:
 
     // The index of the first card of each canonical keyword, made for a header of more cards than a search in order
     // takes as quickly, and kept as cards are added.
-    struct keyword_index;
     void rebuild_index();
 
     std::vector<card> cards_{};
-    // On the heap, so that a header moves without allocating, which the map of some standard libraries does; empty
-    // for a header that is searched in order.
-    std::unique_ptr<keyword_index> index_{};
+    // On the heap, so that a header moves without allocating; empty for a header that is searched in order.
+    std::unique_ptr<detail::keyword_table> index_{};
 };
 
 #if defined(_MSC_VER)

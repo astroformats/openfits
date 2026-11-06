@@ -27,6 +27,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <type_traits>
 
 namespace openfits::detail {
 
@@ -152,6 +153,8 @@ struct tile_encoder
     std::vector<std::int16_t> words{};
     std::vector<float> floats{};
     std::vector<double> doubles{};
+    // The indices of gather() along each axis.
+    std::vector<std::uint64_t> odometer{};
 };
 
 // Gathers the values of the tile whose box is start and size into encoder.stored, converted into their stored values,
@@ -167,7 +170,8 @@ void gather(const image_plan& plan, std::span<const std::uint64_t> start, std::s
         count *= length;
     }
     encoder.stored.resize(count * width);
-    std::vector<std::uint64_t> k(axes.size(), 0);
+    std::vector<std::uint64_t>& k = encoder.odometer;
+    k.assign(axes.size(), 0);
     std::uint64_t position = 0;
     for (;;) {
         std::uint64_t element = 0;
@@ -237,24 +241,86 @@ void gzip_bytes(std::span<const std::byte> values, std::size_t width, bool shuff
 void store_words(std::span<const std::int16_t> words, std::vector<std::byte>& output)
 {
     output.resize(words.size() * 2);
-    for (std::size_t i = 0; i < words.size(); ++i) {
-        store_big_endian(std::span(output).subspan(i * 2).first<2>(), static_cast<std::uint16_t>(words[i]));
+    copy_big_endian(std::as_bytes(words), output, 2);
+}
+
+// The values that the conversions of PLIO_1 lists take at once through blocks on the stack: 4 KiB of the widest.
+constexpr std::size_t plio_block = 512;
+
+// The stored values of type Stored, big-endian, plus offset, as the 32-bit values of a PLIO_1 list into values, which
+// has one for each. Through blocks on the stack, swapped by the kernels and then widened in a loop of unsigned
+// integers, which vectorizes: the vectorizer of MSVC refuses loops between two pointers that might overlap, and SSE2
+// compares no 64-bit integers. A sum within 0 to 2^24 - 1 has its high 8 bits clear, and so has no other, the offset
+// being 0 or 32768 and the sum taken modulo 2^32, or 2^64 for 64-bit values. True when a value lies beyond that range.
+template <typename Stored>
+bool plio_values_of(std::span<const std::byte> stored, std::int32_t offset, std::span<std::int32_t> values) noexcept
+{
+    using sum = std::conditional_t<sizeof(Stored) == 8, std::uint64_t, std::uint32_t>;
+    // Written before they are read: zeros would cost a pass over them at each tile.
+    // NOLINTBEGIN(cppcoreguidelines-pro-type-member-init)
+    std::array<Stored, plio_block> native;
+    std::array<std::int32_t, plio_block> widened;
+    // NOLINTEND(cppcoreguidelines-pro-type-member-init)
+    sum beyond = 0;
+    for (std::size_t first = 0; first < values.size(); first += plio_block) {
+        const std::size_t count = std::min(plio_block, values.size() - first);
+        copy_big_endian(stored.subspan(first * sizeof(Stored), count * sizeof(Stored)),
+                        std::as_writable_bytes(std::span(native).first(count)), sizeof(Stored));
+        for (std::size_t i = 0; i < count; ++i) {
+            const sum value = static_cast<sum>(native[i]) + static_cast<sum>(offset);
+            beyond |= value >> 24U;
+            widened[i] = static_cast<std::int32_t>(value);
+        }
+        std::ranges::copy(std::span(widened).first(count), values.subspan(first).begin());
+    }
+    return beyond != 0;
+}
+
+// The stored values of a tile, big-endian, plus offset, as the 32-bit values of a PLIO_1 list: read without the 64-bit
+// integers of the other algorithms, each checked against the range that PLIO_1 stores.
+void load_plio_values(const image_plan& plan, std::uint64_t index, std::span<const std::byte> stored, std::size_t width,
+                      std::int32_t offset, std::vector<std::int32_t>& values)
+{
+    const std::size_t count = stored.size() / width;
+    values.resize(count);
+    bool beyond = false;
+    switch (width) {
+    case 1:
+        beyond = plio_values_of<std::uint8_t>(stored, offset, values);
+        break;
+    case 2:
+        beyond = plio_values_of<std::int16_t>(stored, offset, values);
+        break;
+    case 4:
+        beyond = plio_values_of<std::int32_t>(stored, offset, values);
+        break;
+    default:
+        beyond = plio_values_of<std::int64_t>(stored, offset, values);
+        break;
+    }
+    if (!beyond) {
+        return;
+    }
+    // The value beyond the range found again, whole, for the message: the stored value, bytes of BITPIX 8 unsigned
+    // and the others signed, plus the offset, which only a 64-bit value near its maximum can take beyond 64 bits.
+    std::array<std::int64_t, 1> value{};
+    for (std::size_t i = 0; i < count; ++i) {
+        load_stored(stored.subspan(i * width, width), width, value);
+        if (value[0] < -std::int64_t{offset} || value[0] > plio_max_value - std::int64_t{offset}) {
+            const std::string text =
+                value[0] > std::numeric_limits<std::int64_t>::max() - offset
+                    ? std::to_string(static_cast<std::uint64_t>(value[0]) + static_cast<std::uint64_t>(offset))
+                    : std::to_string(value[0] + offset);
+            invalid(plan.hdu, "PLIO_1 compresses the values from 0 to 2^24 - 1, and tile " + std::to_string(index + 1) +
+                                  " of unit " + std::to_string(plan.hdu) + " holds " + text + " (standard §10.4.3)");
+        }
     }
 }
 
-void encode_plio(const image_plan& plan, std::uint64_t index, std::span<const std::int64_t> values, std::int64_t offset,
-                 tile_encoder& encoder, encoded_tile& tile)
+void encode_plio(const image_plan& plan, std::uint64_t index, std::span<const std::byte> stored, std::size_t width,
+                 std::int32_t offset, tile_encoder& encoder, encoded_tile& tile)
 {
-    encoder.i32.resize(values.size());
-    for (std::size_t i = 0; i < values.size(); ++i) {
-        const std::int64_t value = values[i] + offset;
-        if (value < 0 || value > plio_max_value) {
-            invalid(plan.hdu, "PLIO_1 compresses the values from 0 to 2^24 - 1, and tile " + std::to_string(index + 1) +
-                                  " of unit " + std::to_string(plan.hdu) + " holds " + std::to_string(value) +
-                                  " (standard §10.4.3)");
-        }
-        encoder.i32[i] = static_cast<std::int32_t>(value);
-    }
+    load_plio_values(plan, index, stored, width, offset, encoder.i32);
     encoder.words.clear();
     plio_encode(encoder.i32, encoder.words);
     store_words(encoder.words, tile.bytes);
@@ -370,13 +436,13 @@ void encode_integers(const image_plan& plan, std::uint64_t index, std::span<cons
         tile.elements = count;
         return;
     }
+    if (plan.algorithm == tile_algorithm::plio) {
+        encode_plio(plan, index, big_endian, width, plan.plio_offset ? 32768 : 0, encoder, tile);
+        return;
+    }
     encoder.i64.resize(count);
     load_stored(big_endian, width, encoder.i64);
-    if (plan.algorithm == tile_algorithm::plio) {
-        encode_plio(plan, index, encoder.i64, plan.plio_offset ? 32768 : 0, encoder, tile);
-    } else {
-        encode_hcompress(plan, index, encoder.i64, size, null, encoder, tile);
-    }
+    encode_hcompress(plan, index, encoder.i64, size, null, encoder, tile);
 }
 
 template <typename T> void load_reals(std::span<const std::byte> stored, std::vector<T>& values)
@@ -734,7 +800,7 @@ compressed_unit compress_image(const image_info& image, const write_conversion& 
     // A deque, which builds them in place: the state of zlib does not move.
     std::deque<tile_encoder> encoders;
     for (std::size_t w = 0; w < workers; ++w) {
-        encoders.emplace_back(options.gzip_level.value_or(-1));
+        encoders.emplace_back(options.gzip_level.value_or(default_tile_level));
     }
     std::vector<encoded_tile> encoded(checked_cast<std::size_t>(grid.count()));
     const std::uint64_t per_band = bands.tiles_per_band();
@@ -956,7 +1022,8 @@ encoded_tile encode_tile_again(const tile_encoding& encoding, std::uint64_t inde
                           .plio_offset = encoding.plio_offset,
                           .hcompress_scale = encoding.hcompress_scale,
                           .hdu = hdu};
-    tile_encoder encoder(-1);
+    // The level of zlib is not recorded in a file: tiles of GZIP are encoded again at the level of the library.
+    tile_encoder encoder(default_tile_level);
     encoder.stored.assign(stored.begin(), stored.end());
     encoded_tile tile;
     if (encoding.quantized && !spacing) {

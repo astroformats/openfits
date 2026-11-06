@@ -10,6 +10,7 @@
 #include <openfits/io.h>
 
 #include "core/diagnostic_log.h"
+#include "core/simd.h"
 #include "header/record.h"
 #include "io/thread_safe_source.h"
 
@@ -46,8 +47,9 @@ inline constexpr std::size_t sum_round = std::size_t{1} << 30;
 
 /// The sum of bytes taken as big-endian 32-bit integers from their first byte, a last integer that they end within
 /// completed with zeros: 0 for bytes that are all zeros, and never 0 otherwise. round is the pairs of integers added
-/// before each fold, a parameter for the tests.
-[[nodiscard]] std::uint32_t sum_of(std::span<const std::byte> bytes, std::size_t round = sum_round) noexcept;
+/// before each fold, a parameter for the tests. The kernels: AVX2, the best one, and the scalar code, the baseline too.
+[[nodiscard]] std::uint32_t sum_of(std::span<const std::byte> bytes, std::size_t round = sum_round,
+                                   simd_kernel kernel = simd_kernel::best) noexcept;
 
 /// The sum of bytes given in pieces of any size, in order, each integer continuing across the pieces as sum_of() of
 /// all of them would take it.

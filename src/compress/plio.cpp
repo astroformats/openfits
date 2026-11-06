@@ -107,10 +107,17 @@ void plio_encode(std::span<const std::int32_t> values, std::vector<std::int16_t>
         throw usage_error(errc::invalid_argument, "PLIO_1 compresses at most " + std::to_string(plio_max_pixels) +
                                                       " pixels in a tile, not " + std::to_string(values.size()));
     }
+    // Checked without a branch, which vectorizes; the value beyond the range found again for the message.
+    std::uint32_t beyond = 0;
     for (const std::int32_t value : values) {
-        if (value < 0 || value > plio_max_value) {
-            throw usage_error(errc::invalid_argument,
-                              "PLIO_1 compresses the values from 0 to 2^24 - 1, and not " + std::to_string(value));
+        beyond |= static_cast<std::uint32_t>(value < 0) | static_cast<std::uint32_t>(value > plio_max_value);
+    }
+    if (beyond != 0) {
+        for (const std::int32_t value : values) {
+            if (value < 0 || value > plio_max_value) {
+                throw usage_error(errc::invalid_argument,
+                                  "PLIO_1 compresses the values from 0 to 2^24 - 1, and not " + std::to_string(value));
+            }
         }
     }
     const std::size_t start = output.size();

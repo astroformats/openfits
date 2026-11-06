@@ -9,6 +9,7 @@
 #include <openfits/reader.h>
 #include <openfits/types.h>
 
+#include "core/scratch_buffer.h"
 #include "data/image_description.h"
 #include "io/thread_safe_source.h"
 #include "support/counting_source.h"
@@ -372,21 +373,29 @@ TEST(image_read, a_sparse_region_is_read_run_by_run)
 
 TEST(image_read, runs_close_together_are_read_together)
 {
-    // Rows of 8 KB: the runs of 8 bytes are less than 64 KiB apart, so that one read takes them all.
+    // Rows of 8 KB: the runs of 8 bytes are less than 64 KiB apart, so that one read takes them all, as many as the
+    // staging chunk holds: the 50 rows of 400 KB, and the 100 rows of 800 KB in two reads.
+    static_assert(openfits::detail::staging_size == std::size_t{448} << 10);
     const std::vector<std::uint64_t> axes{4000, 100};
     const fixture file = int16_image(axes, ramp(axes));
-    const std::vector<served_read> reads = reads_of(file, {.region = region{.start = {10, 0}, .size = {4, 100}}}, 400);
-    EXPECT_EQ(reads, (std::vector<served_read>{{.offset = 2880 + 20, .size = (99 * 8000) + 8}}));
+    EXPECT_EQ(reads_of(file, {.region = region{.start = {10, 0}, .size = {4, 50}}}, 200),
+              (std::vector<served_read>{{.offset = 2880 + 20, .size = (49 * 8000) + 8}}));
+    // The first read takes the runs that end within 458,752 bytes of the first: 58 rows.
+    EXPECT_EQ(reads_of(file, {.region = region{.start = {10, 0}, .size = {4, 100}}}, 400),
+              (std::vector<served_read>{{.offset = 2880 + 20, .size = (57 * 8000) + 8},
+                                        {.offset = 2880 + (58 * 8000) + 20, .size = (41 * 8000) + 8}}));
 }
 
 TEST(image_read, a_dense_region_is_read_in_chunks_of_the_bytes_that_span_it)
 {
-    // The runs are 80 KB apart, beyond the gap, but they hold most of the bytes that span them.
+    // The runs are 80 KB apart, beyond the gap, but they hold most of the bytes that span them: read in chunks of the
+    // staging size, five rows of 380 KB each.
     const std::vector<std::uint64_t> axes{40000, 10};
     const fixture file = int16_image(axes, ramp(axes));
     const std::vector<served_read> reads =
         reads_of(file, {.region = region{.start = {0, 0}, .size = {30000, 10}}}, 300000);
-    EXPECT_EQ(reads, (std::vector<served_read>{{.offset = 2880, .size = (9 * 80000) + 60000}}));
+    EXPECT_EQ(reads, (std::vector<served_read>{{.offset = 2880, .size = (4 * 80000) + 60000},
+                                               {.offset = 2880 + (5 * 80000), .size = (4 * 80000) + 60000}}));
 }
 
 TEST(image_read, a_contiguous_region_is_read_into_the_destination_itself)

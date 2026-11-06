@@ -75,6 +75,19 @@ struct value_field
 [[nodiscard]] value_field read_value_field(std::string_view field, bool at_byte_11,
                                            std::vector<diagnostic>& departures);
 
+/// Where read_value_field_into() finds the value of a value field, as value_field has it.
+struct value_extent
+{
+    std::size_t value_begin = 0;
+    std::size_t value_end = 0;
+    bool fixed_format = false;
+};
+
+/// read_value_field() with the value and the comment written into value and comment, which it replaces: a reader
+/// makes the cards of a header in their place, without values and comments made apart and moved into them.
+value_extent read_value_field_into(std::string_view field, bool at_byte_11, std::vector<diagnostic>& departures,
+                                   card_value& value, std::string& comment);
+
 /// The text of an integer (standard §4.2.3).
 [[nodiscard]] std::string format_integer(std::int64_t value);
 [[nodiscard]] std::string format_integer(std::uint64_t value);

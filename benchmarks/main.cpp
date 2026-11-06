@@ -56,6 +56,9 @@ int main(int argc, char** argv)
     openfits::bench::register_image_benchmarks();
     openfits::bench::register_table_benchmarks();
     openfits::bench::register_compression_benchmarks();
+    openfits::bench::register_codec_benchmarks();
+    openfits::bench::register_edit_benchmarks();
+    openfits::bench::register_kernel_benchmarks();
     benchmark::RunSpecifiedBenchmarks();
     benchmark::Shutdown();
     openfits::bench::remove_benchmark_files();

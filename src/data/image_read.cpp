@@ -150,9 +150,11 @@ void read_contiguous(pixel_job& job, std::uint64_t first, std::uint64_t count, s
         }
         return;
     }
-    scratch_buffer staging(std::min(piece, count) * job.stored_size);
+    // Values that convert into a narrower type, through a staging chunk of its own size.
+    const std::uint64_t part = std::max<std::uint64_t>(1, std::min(job.transfer, staging_size) / job.stored_size);
+    scratch_buffer staging(std::min(part, count) * job.stored_size);
     for (std::uint64_t done = 0; done < count;) {
-        const std::uint64_t values = std::min(piece, count - done);
+        const std::uint64_t values = std::min(part, count - done);
         const std::span<std::byte> bytes = staging.bytes().first(values * job.stored_size);
         job.source.read(offset + (done * job.stored_size), bytes);
         job.add_to_sum(bytes);
@@ -324,7 +326,10 @@ bool contiguous(const region_selection& selection, std::span<const std::uint64_t
 void read_runs(pixel_job& job, const region_selection& selection, std::span<const std::uint64_t> lengths,
                std::uint64_t pitch)
 {
-    run_walker walker(selection, lengths, pitch, job.stored_size, job.transfer);
+    // Runs gathered from the staging chunk are at most its size; those read from memory or into the destination too, so
+    // that the walk is the same.
+    const std::size_t transfer = std::min(job.transfer, staging_size);
+    run_walker walker(selection, lengths, pitch, job.stored_size, transfer);
     const std::span<const std::byte> held = job.source.bytes();
     if (!held.empty()) {
         for (; !walker.done(); walker.next()) {
@@ -344,7 +349,7 @@ void read_runs(pixel_job& job, const region_selection& selection, std::span<cons
         (corner(selection, lengths, true) - corner(selection, lengths, false) + 1) * job.stored_size;
     const bool dense = rows * row_bytes >= hull / dense_share;
     // A run is at most the transfer size, or one value.
-    const std::uint64_t capacity = std::max<std::uint64_t>(job.transfer, job.stored_size);
+    const std::uint64_t capacity = std::max<std::uint64_t>(transfer, job.stored_size);
     const bool in_place = job.stored_size == job.value_size && job.conversion_step == 1;
     std::optional<scratch_buffer> staging;
     std::vector<pixel_run> group;

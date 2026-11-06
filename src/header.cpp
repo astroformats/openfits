@@ -8,45 +8,24 @@
 #include "core/keyword_name.h"
 #include "core/quote.h"
 #include "core/value_text.h"
+#include "header/keyword_table.h"
 #include "header/keywords.h"
 #include "header/long_string.h"
 #include "header/record.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
-#include <map>
-#include <memory_resource>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace openfits {
 
-// The first card of each canonical keyword, for a header of more cards than searched_cards. Its nodes come from an
-// arena of its own, which takes one allocation for the first 32 keywords, where a map takes one for each, and grows by
-// blocks after them.
-struct header::keyword_index
-{
-    // The bytes of a node of the map, its key and its value, as the standard libraries make them, or about.
-    static constexpr std::size_t node_size = 96;
-
-    explicit keyword_index(std::size_t cards) : arena(std::clamp<std::size_t>(cards, 1, 32) * node_size) {}
-
-    // Makes the card at position the first of keyword, unless it has one.
-    void add(std::string_view keyword, std::size_t position)
-    {
-        (void)first.try_emplace(std::pmr::string(keyword, &arena), position);
-    }
-
-    std::pmr::monotonic_buffer_resource arena;
-    std::pmr::map<std::pmr::string, std::size_t, std::less<>> first{&arena};
-};
-
 namespace {
 
-// The cards of a header that a lookup searches in order, which takes less than an index takes to make: the walk of a
-// file reads the header of every unit, most of them short.
-constexpr std::size_t searched_cards = 32;
+using detail::keyword_table;
 
 // The text of a commentary card, bytes 9 to 80 of its record.
 constexpr std::size_t commentary_length = detail::record_length - 8;
@@ -210,11 +189,11 @@ std::optional<std::size_t> header::index_of(std::string_view keyword) const
         }
         return std::nullopt;
     }
-    const auto found = index_->first.find(keyword);
-    if (found == index_->first.end()) {
+    const std::size_t found = index_->find(keyword, cards_);
+    if (found == keyword_table::none) {
         return std::nullopt;
     }
-    return found->second;
+    return found;
 }
 
 std::size_t header::count(std::string_view keyword) const
@@ -429,9 +408,9 @@ void header::append(card value)
     const std::size_t fill = free_cards();
     if (fill == 0 || is_blank(value)) {
         cards_.push_back(std::move(value));
-        if (index_) {
-            index_->add(cards_.back().keyword(), cards_.size() - 1);
-        } else if (cards_.size() > searched_cards) {
+        if (index_ && keyword_table::indexes(cards_.size())) {
+            index_->add(cards_.back().keyword(), cards_.size() - 1, cards_.back().has_value_indicator(), cards_);
+        } else if (index_ || keyword_table::indexes(cards_.size())) {
             rebuild_index();
         }
         return;
@@ -440,16 +419,18 @@ void header::append(card value)
     cards_[position] = std::move(value);
     const std::string_view name = cards_[position].keyword();
     if (index_ && !name.empty()) {
-        // The blank card replaced may be the first card of the blank keyword, which the index names.
-        const auto blank = index_->first.find(std::string_view{});
-        if (blank != index_->first.end() && blank->second == position) {
-            if (fill > 1) {
-                blank->second = position + 1;
-            } else {
-                index_->first.erase(blank);
+        // The blank card replaced may be the first card of the blank keyword, which the index names: the next fill
+        // card is then the first, or, for the last of the fill, the index is made again without it.
+        keyword_table::slot* blank = index_->slot_of(std::string_view{}, cards_);
+        if (blank != nullptr && blank->position == position) {
+            if (fill == 1) {
+                rebuild_index();
+                return;
             }
+            // A position of the header, which the index holds in 32 bits.
+            blank->position = static_cast<std::uint32_t>(position + 1);
         }
-        index_->add(name, position);
+        index_->add(name, position, cards_[position].has_value_indicator(), cards_);
     }
 }
 
@@ -565,13 +546,14 @@ std::string header::to_string(bool commentary) const
 
 void header::rebuild_index()
 {
-    if (cards_.size() <= searched_cards) {
+    if (!keyword_table::indexes(cards_.size())) {
         index_.reset();
         return;
     }
-    auto keywords = std::make_unique<keyword_index>(cards_.size());
+    // The cards in their order, the first of each keyword kept, in one pass and one allocation.
+    auto keywords = std::make_unique<keyword_table>(cards_.size());
     for (std::size_t i = 0; i < cards_.size(); ++i) {
-        keywords->add(cards_[i].keyword(), i);
+        keywords->add(cards_[i].keyword(), i, cards_[i].has_value_indicator(), cards_);
     }
     index_ = std::move(keywords);
 }

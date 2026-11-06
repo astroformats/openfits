@@ -71,21 +71,22 @@ enum class conversion : std::uint8_t
 
 // libc++ implements floating-point std::from_chars only from LLVM 20, and that of libstdc++ before GCC 12 reports a
 // subnormal result as out of range without storing it. strtod_l with the "C" locale reads the same syntax without
-// depending on the global locale. Only an overflow is reported as out of range: an underflow keeps the rounded value,
-// a zero or a subnormal.
-conversion convert(const std::string& number, double& value)
+// depending on the global locale, from a copy of the number that ends with a null character. Only an overflow is
+// reported as out of range: an underflow keeps the rounded value, a zero or a subnormal.
+conversion convert(std::span<const char> number, double& value)
 {
+    const std::string text(number.begin(), number.end());
     const locale_t c_locale = newlocale(LC_ALL_MASK, "C", locale_t{});
     if (c_locale == locale_t{}) {
         throw std::bad_alloc();
     }
     errno = 0;
     char* end = nullptr;
-    value = strtod_l(number.c_str(), &end, c_locale);
+    value = strtod_l(text.c_str(), &end, c_locale);
     const bool overflow = errno == ERANGE && std::isinf(value);
     freelocale(c_locale);
 
-    if (end != number.c_str() + number.size()) {
+    if (end != text.c_str() + text.size()) {
         return conversion::failed;
     }
     return overflow ? conversion::out_of_range : conversion::converted;
@@ -93,7 +94,7 @@ conversion convert(const std::string& number, double& value)
 
 #else
 
-conversion convert(const std::string& number, double& value) noexcept
+conversion convert(std::span<const char> number, double& value) noexcept
 {
     const char* const begin = number.data();
     const char* const end = begin + number.size();
@@ -108,6 +109,84 @@ conversion convert(const std::string& number, double& value) noexcept
 }
 
 #endif
+
+// The powers of ten that a double holds exactly.
+constexpr std::array<double, 23> exact_powers{1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
+                                              1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
+
+// A number of the grammar of standard §4.2.4, [sign] digits [. digits] [E or D [sign] digits], the exponent letter in
+// either case, whose digits make an integer of at most 2^53 and whose decimal exponent is at most 22 in magnitude: the
+// product or the quotient of two doubles that hold their values exactly, which one operation of IEEE arithmetic rounds
+// correctly (Clinger's fast path), as most values of headers are. Nothing for any other text, which a conversion of
+// the standard library reads.
+std::optional<double> exact_real(std::string_view token) noexcept
+{
+    std::size_t i = 0;
+    const bool negative = !token.empty() && token.front() == '-';
+    if (!token.empty() && (token.front() == '+' || token.front() == '-')) {
+        ++i;
+    }
+    // The significant digits, leading zeros left out, and the exponent of the last of them.
+    std::uint64_t mantissa = 0;
+    int significant = 0;
+    int scale = 0;
+    bool digit = false;
+    bool point = false;
+    for (; i < token.size(); ++i) {
+        const char c = token[i];
+        if (c == '.' && !point) {
+            point = true;
+            continue;
+        }
+        if (!is_digit(c)) {
+            break;
+        }
+        digit = true;
+        if (mantissa == 0 && c == '0') {
+            scale -= point ? 1 : 0;
+            continue;
+        }
+        // Beyond 16 digits, an integer that may pass 2^53.
+        if (significant == 16) {
+            return std::nullopt;
+        }
+        mantissa = (mantissa * 10) + static_cast<std::uint64_t>(c - '0');
+        ++significant;
+        scale -= point ? 1 : 0;
+    }
+    if (!digit) {
+        return std::nullopt;
+    }
+    int exponent = 0;
+    if (i < token.size()) {
+        const char letter = token[i];
+        if (letter != 'E' && letter != 'e' && letter != 'D' && letter != 'd') {
+            return std::nullopt;
+        }
+        ++i;
+        const bool negative_exponent = i < token.size() && token[i] == '-';
+        if (i < token.size() && (token[i] == '+' || token[i] == '-')) {
+            ++i;
+        }
+        // At most four digits, beyond which no exponent is exact.
+        const std::size_t first = i;
+        for (; i < token.size() && is_digit(token[i]) && i - first < 4; ++i) {
+            exponent = (exponent * 10) + (token[i] - '0');
+        }
+        if (i == first || i != token.size()) {
+            return std::nullopt;
+        }
+        exponent = negative_exponent ? -exponent : exponent;
+    }
+    const int power = mantissa == 0 ? 0 : scale + exponent;
+    if (mantissa > (std::uint64_t{1} << 53U) || power < -22 || power > 22) {
+        return std::nullopt;
+    }
+    const auto exact = static_cast<double>(mantissa);
+    const double value = power < 0 ? exact / exact_powers[static_cast<std::size_t>(-power)]
+                                   : exact * exact_powers[static_cast<std::size_t>(power)];
+    return negative ? -value : value;
+}
 
 // True when the magnitude of a number of the grammar is at least one: when its conversion is out of range, this tells
 // an overflow from an underflow. The exponent saturates far beyond the range of any type.
@@ -152,35 +231,39 @@ bool at_least_one(std::string_view token) noexcept
 // ---------------------------------------------------------------------------------------------------------------------
 // Value fields
 
-// The comment that follows a slash: without the space after the slash, and without trailing spaces.
-std::string comment_text(std::string_view after_slash)
+// The comment that follows a slash, into comment: without the space after the slash, and without trailing spaces.
+void assign_comment(std::string& comment, std::string_view after_slash)
 {
     if (!after_slash.empty() && after_slash.front() == ' ') {
         after_slash.remove_prefix(1);
     }
-    return std::string(trim_trailing_spaces(after_slash));
+    comment.assign(trim_trailing_spaces(after_slash));
 }
 
 // A string from its opening quote at field[begin] (standard §4.2.1.1). Returns the position after its closing quote.
 std::size_t read_string(std::string_view field, std::size_t begin, card_value& value,
                         std::vector<diagnostic>& departures)
 {
+    // The characters up to each quote appended at once: a quote doubled is one quote, and another ends the string.
     std::string text;
     std::size_t i = begin + 1;
     bool closed = false;
     while (i < field.size()) {
-        if (field[i] == '\'') {
-            if (i + 1 < field.size() && field[i + 1] == '\'') {
-                text += '\'';
-                i += 2;
-                continue;
-            }
-            closed = true;
-            ++i;
+        const std::size_t quote = field.find('\'', i);
+        if (quote == std::string_view::npos) {
+            text.append(field.substr(i));
+            i = field.size();
             break;
         }
-        text += field[i];
-        ++i;
+        text.append(field.substr(i, quote - i));
+        if (quote + 1 < field.size() && field[quote + 1] == '\'') {
+            text += '\'';
+            i = quote + 2;
+            continue;
+        }
+        closed = true;
+        i = quote + 1;
+        break;
     }
     if (!closed) {
         depart(departures, severity::warning, errc::invalid_string, "4.2.1.1",
@@ -256,8 +339,16 @@ std::size_t read_complex(std::string_view field, std::size_t begin, card_value& 
     return close + 1;
 }
 
-// A logical or a number, the token of the value up to the next space or slash (standard §4.2.2 to §4.2.4).
-void read_token(std::string_view token, card_value& value, std::vector<diagnostic>& departures)
+// True for the tokens of a logical value: T and F, and t and f, which a reader takes with a warning.
+bool is_logical_token(std::string_view token) noexcept
+{
+    return token == "T" || token == "F" || token == "t" || token == "f";
+}
+
+// A logical or a number, the token of the value up to the next space or slash (standard §4.2.2 to §4.2.4), which
+// scanned is the scan_number() of when it is not logical.
+void read_token(std::string_view token, const scanned_number& scanned, card_value& value,
+                std::vector<diagnostic>& departures)
 {
     if (token == "T" || token == "F") {
         value = token == "T";
@@ -268,11 +359,10 @@ void read_token(std::string_view token, card_value& value, std::vector<diagnosti
         value = token == "t";
         return;
     }
-    const scanned_number scanned = scan_number(token);
     switch (scanned.form) {
     case number_form::integer:
-        if (const std::optional<card_value> integer = integer_value(token)) {
-            value = *integer;
+        if (std::optional<card_value> integer = integer_value(token)) {
+            value = std::move(*integer);
         } else {
             // The standard limits neither integers nor reals (§4.2.3, §4.2.4): a number beyond the types of the library
             // departs from no section.
@@ -299,29 +389,36 @@ void read_token(std::string_view token, card_value& value, std::vector<diagnosti
            quote(token) + " is none of the forms of keyword values");
 }
 
-// The value that starts at field[begin], into result. Returns the position after it.
-std::size_t read_value(std::string_view field, std::size_t begin, bool at_byte_11, value_field& result,
-                       std::vector<diagnostic>& departures)
+// The value that starts at field[begin], into value, and whether it is in the fixed format. Returns the position after
+// it.
+std::size_t read_value(std::string_view field, std::size_t begin, bool at_byte_11, card_value& value,
+                       bool& fixed_format, std::vector<diagnostic>& departures)
 {
     if (field[begin] == '\'') {
-        result.fixed_format = at_byte_11 && begin == 0;
-        return read_string(field, begin, result.value, departures);
+        fixed_format = at_byte_11 && begin == 0;
+        return read_string(field, begin, value, departures);
     }
     if (field[begin] == '(') {
-        return read_complex(field, begin, result.value, departures);
+        return read_complex(field, begin, value, departures);
     }
-    std::size_t end = std::min(field.find_first_of(" /", begin), field.size());
-    const std::string_view token = field.substr(begin, end - begin);
-    if (token != "T" && token != "F" && token != "t" && token != "f" &&
-        scan_number(token).form == number_form::not_a_number) {
+    // The token runs to the next space or slash, found in a loop, which costs less than find_first_of() of the two.
+    std::size_t end = begin;
+    while (end < field.size() && field[end] != ' ' && field[end] != '/') {
+        ++end;
+    }
+    std::string_view token = field.substr(begin, end - begin);
+    scanned_number scanned = is_logical_token(token) ? scanned_number{} : scan_number(token);
+    if (!is_logical_token(token) && scanned.form == number_form::not_a_number) {
         // A value of none of the forms runs to the slash of the comment, as a string written without its quotes does,
         // its spaces included.
         const std::size_t slash = std::min(field.find('/', end), field.size());
         end = begin + trim_trailing_spaces(field.substr(begin, slash - begin)).size();
+        token = field.substr(begin, end - begin);
+        scanned = is_logical_token(token) ? scanned_number{} : scan_number(token);
     }
-    read_token(field.substr(begin, end - begin), result.value, departures);
+    read_token(token, scanned, value, departures);
     // Byte 30 is the twentieth of the field.
-    result.fixed_format = at_byte_11 && end == 20 && result.value.kind() != value_kind::none;
+    fixed_format = at_byte_11 && end == 20 && value.kind() != value_kind::none;
     return end;
 }
 
@@ -395,11 +492,20 @@ std::optional<card_value> integer_value(std::string_view token) noexcept
 
 std::optional<double> real_value(std::string_view token)
 {
-    // std::from_chars takes no leading plus sign and no exponent letter D.
-    std::string number(!token.empty() && token.front() == '+' ? token.substr(1) : token);
-    std::ranges::replace_if(number, [](char c) { return c == 'D' || c == 'd'; }, 'E');
+    if (const std::optional<double> exact = exact_real(token)) {
+        return exact;
+    }
+    // std::from_chars takes no leading plus sign and no exponent letter D: a number written with D is converted from a
+    // copy with E, and any other from its own characters.
+    std::string_view number = !token.empty() && token.front() == '+' ? token.substr(1) : token;
+    std::string with_e;
+    if (number.find_first_of("Dd") != std::string_view::npos) {
+        with_e.assign(number);
+        std::ranges::replace_if(with_e, [](char c) { return c == 'D' || c == 'd'; }, 'E');
+        number = with_e;
+    }
     double value = 0;
-    switch (convert(number, value)) {
+    switch (convert(std::span<const char>(number.begin(), number.end()), value)) {
     case conversion::converted:
         return value;
     case conversion::out_of_range:
@@ -432,31 +538,44 @@ std::optional<double> plain_real_value(std::span<const char> number) noexcept
 value_field read_value_field(std::string_view field, bool at_byte_11, std::vector<diagnostic>& departures)
 {
     value_field result;
+    const value_extent extent = read_value_field_into(field, at_byte_11, departures, result.value, result.comment);
+    result.value_begin = extent.value_begin;
+    result.value_end = extent.value_end;
+    result.fixed_format = extent.fixed_format;
+    return result;
+}
+
+value_extent read_value_field_into(std::string_view field, bool at_byte_11, std::vector<diagnostic>& departures,
+                                   card_value& value, std::string& comment)
+{
+    value_extent result;
+    value = card_value();
+    comment.clear();
     const std::size_t begin = skip_spaces(field, 0);
     if (begin == field.size() || field[begin] == '/') {
         // A value indicator followed by blanks (standard §4.1.2.3).
-        result.value = undefined;
+        value = undefined;
         result.value_begin = begin;
         result.value_end = begin;
         result.fixed_format = true;
         if (begin < field.size()) {
-            result.comment = comment_text(field.substr(begin + 1));
+            assign_comment(comment, field.substr(begin + 1));
         }
         return result;
     }
 
-    const std::size_t end = read_value(field, begin, at_byte_11, result, departures);
+    const std::size_t end = read_value(field, begin, at_byte_11, value, result.fixed_format, departures);
     result.value_begin = begin;
     result.value_end = end;
 
     const std::size_t next = skip_spaces(field, end);
     if (next < field.size()) {
         if (field[next] == '/') {
-            result.comment = comment_text(field.substr(next + 1));
+            assign_comment(comment, field.substr(next + 1));
         } else {
             depart(departures, severity::warning, errc::invalid_comment, "4.1.2.3",
                    "the text after the value, " + quote(field.substr(next)) + ", does not start with a slash");
-            result.comment = std::string(trim_trailing_spaces(field.substr(next)));
+            comment.assign(trim_trailing_spaces(field.substr(next)));
         }
     }
     return result;

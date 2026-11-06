@@ -77,12 +77,16 @@ struct tile_run
     std::uint64_t count = 0;
 };
 
+struct tile_run_buffers;
+
 /// Calls run(r) for every run of the elements of selection that lie in the tile whose first element is start along
 /// each axis and whose lengths are size, with the destination of the region laid out in rows pitch elements apart (0
-/// for rows that follow each other), as reader::read_pixels() lays it out.
+/// for rows that follow each other), as reader::read_pixels() lays it out. buffers holds its memory, which a caller
+/// that visits many tiles keeps from one to the next, so that the runs of a tile allocate nothing.
 template <typename Function>
 void for_each_tile_run(const region_selection& selection, std::span<const std::uint64_t> start,
-                       std::span<const std::uint64_t> size, std::uint64_t pitch, const Function& run);
+                       std::span<const std::uint64_t> size, std::uint64_t pitch, tile_run_buffers& buffers,
+                       const Function& run);
 
 /// The range of the indices k of the elements of an axis of a region, first + k x step, that lie from the element low
 /// to the element high: in [begin, end), empty when begin >= end.
@@ -94,12 +98,22 @@ struct index_range
 
 [[nodiscard]] index_range selected_within(const axis_selection& axis, std::uint64_t low, std::uint64_t high) noexcept;
 
+/// The memory of for_each_tile_run(): the range of the region along each axis within the tile, and the indices of its
+/// rows.
+struct tile_run_buffers
+{
+    std::vector<index_range> ranges{};
+    std::vector<std::uint64_t> k{};
+};
+
 template <typename Function>
 void for_each_tile_run(const region_selection& selection, std::span<const std::uint64_t> start,
-                       std::span<const std::uint64_t> size, std::uint64_t pitch, const Function& run)
+                       std::span<const std::uint64_t> size, std::uint64_t pitch, tile_run_buffers& buffers,
+                       const Function& run)
 {
     const std::size_t axes = selection.axes.size();
-    std::vector<index_range> ranges(axes);
+    std::vector<index_range>& ranges = buffers.ranges;
+    ranges.resize(axes);
     for (std::size_t a = 0; a < axes; ++a) {
         ranges[a] = selected_within(selection.axes[a], start[a], start[a] + size[a] - 1);
         if (ranges[a].begin >= ranges[a].end) {
@@ -109,7 +123,8 @@ void for_each_tile_run(const region_selection& selection, std::span<const std::u
     const axis_selection& first = selection.axes.front();
     const std::uint64_t row_pitch = pitch == 0 ? first.count : pitch;
     // The indices of the region along the other axes, as an odometer from the first in the tile, the second fastest.
-    std::vector<std::uint64_t> k(axes);
+    std::vector<std::uint64_t>& k = buffers.k;
+    k.resize(axes);
     for (std::size_t a = 0; a < axes; ++a) {
         k[a] = ranges[a].begin;
     }

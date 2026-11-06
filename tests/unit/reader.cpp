@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Ezequiel Ruiz
 
+#include <openfits/card.h>
+#include <openfits/checksum.h>
 #include <openfits/error.h>
+#include <openfits/header.h>
 #include <openfits/io.h>
 #include <openfits/reader.h>
+#include <openfits/writer.h>
 
 #include "support/checksums.h"
 #include "support/counting_source.h"
@@ -12,6 +16,7 @@
 #include "support/fixture_builder.h"
 #include "support/temp_directory.h"
 #include "support/throws.h"
+#include "support/written_file.h"
 
 #include <gtest/gtest.h>
 
@@ -89,23 +94,46 @@ TEST(reader, reads_the_primary_header_in_one_read_and_no_data)
     EXPECT_EQ(input.size(), file.size());
 }
 
-TEST(reader, reads_a_long_header_in_reads_that_double)
+// A header longer than the first read is read on in pieces of 159 blocks at most, each read once into a buffer of its
+// own: 4 blocks, then 159, then the 41 left of 204 blocks.
+TEST(reader, reads_a_long_header_in_pieces_after_its_first_read)
 {
     std::vector<std::string> records = primary_records();
-    for (int i = 0; i < 300; ++i) {
+    for (int i = 0; i < 7340; ++i) {
         records.push_back(card_record("KEY" + std::to_string(i), std::to_string(i)));
     }
     const fixture file = fixture().header(records);
     auto source = std::make_unique<counting_source>(file.bytes());
     const counting_source& counter = *source;
     const reader input(std::move(source));
-    // 304 records are 9 blocks: 4, then 4 more, then the last one.
     constexpr std::uint64_t block = 2880;
+    ASSERT_EQ(file.size(), 204 * block);
     EXPECT_EQ(counter.reads(), (std::vector<served_read>{{.offset = 0, .size = 4 * block},
-                                                         {.offset = 4 * block, .size = 4 * block},
-                                                         {.offset = 8 * block, .size = block}}));
-    EXPECT_EQ(input.hdu(0).header_size(), 9U * 2880U);
-    EXPECT_EQ(input.hdu(0).header().size(), 303U);
+                                                         {.offset = 4 * block, .size = 159 * block},
+                                                         {.offset = 163 * block, .size = 41 * block}}));
+    EXPECT_EQ(input.hdu(0).header_size(), 204U * 2880U);
+    ASSERT_EQ(input.hdu(0).header().size(), 7343U);
+    EXPECT_EQ(input.hdu(0).header().value<int>("KEY7339"), 7339);
+    EXPECT_TRUE(input.hdu(0).diagnostics().empty());
+}
+
+// The header part of CHECKSUM sums every piece of a header read in pieces: a header of 204 blocks written with its
+// checksums verifies, read as from a file and from memory.
+TEST(reader, verifies_the_checksum_of_a_header_read_in_pieces)
+{
+    openfits::header cards;
+    for (int i = 0; i < 7340; ++i) {
+        cards.append(openfits::card("KEY" + std::to_string(i), i));
+    }
+    openfits::writer output;
+    (void)output.add_header(std::move(cards));
+    const std::vector<std::byte> bytes = openfits::test::written(output, {.checksums = true});
+    ASSERT_GT(bytes.size(), 163U * 2880U);
+    const reader from_file(std::make_unique<counting_source>(bytes));
+    EXPECT_EQ(from_file.verify(0).checksum, openfits::checksum_state::valid);
+    EXPECT_EQ(from_file.verify(0).datasum, openfits::checksum_state::valid);
+    const reader from_memory(std::make_unique<openfits::memory_source>(std::vector<std::byte>(bytes)));
+    EXPECT_EQ(from_memory.verify(0).checksum, openfits::checksum_state::valid);
 }
 
 TEST(reader, walks_units_when_they_are_asked_for)
@@ -439,6 +467,39 @@ TEST(reader, limits_the_diagnostics_of_the_file)
     // The budget of the file is spent: the next unit gets one, which stands for its two.
     EXPECT_EQ(input.hdu(1).diagnostics().size(), 1U);
     EXPECT_EQ(open(file, {.limits = {.max_diagnostics = 0}}).hdu(0).diagnostics().size(), 10U);
+}
+
+// The cards with a value after a card of their keyword with a value are reported in the order of the cards, whether the
+// header is short and searched in order or long and indexed: a commentary card of the keyword counts for none, and
+// HIERARCH names that share their first eight bytes are told apart.
+TEST(reader, reports_repeated_keywords_whether_the_header_is_indexed_or_not)
+{
+    for (const int others : {0, 40}) {
+        std::vector<std::string> records = primary_records();
+        records.push_back(card_record("EXPTIME", "1.0"));
+        for (int i = 0; i < others; ++i) {
+            records.push_back(card_record("KEY" + std::to_string(i), std::to_string(i)));
+        }
+        records.push_back(record("FOO     is commentary"));
+        records.push_back(card_record("FOO", "1"));
+        records.push_back(record("HIERARCH ESO DET CHIP1 GAIN = 1"));
+        records.push_back(record("HIERARCH ESO DET CHIP2 GAIN = 2"));
+        records.push_back(card_record("EXPTIME", "2.0"));
+        records.push_back(card_record("FOO", "2"));
+        records.push_back(record("HIERARCH ESO DET CHIP1 GAIN = 3"));
+        const reader input = open(fixture().header(records));
+        std::vector<std::pair<std::string, std::uint64_t>> repeated;
+        for (const diagnostic& found : input.hdu(0).diagnostics()) {
+            if (found.code == errc::repeated_keyword) {
+                EXPECT_EQ(found.severity, severity::warning);
+                repeated.emplace_back(found.context.keyword, found.context.offset.value_or(0));
+            }
+        }
+        const std::uint64_t last = (records.size() - 1) * 80;
+        EXPECT_EQ(repeated, (std::vector<std::pair<std::string, std::uint64_t>>{
+                                {"EXPTIME", last - 160}, {"FOO", last - 80}, {"ESO DET CHIP1 GAIN", last}}))
+            << others << " other cards";
+    }
 }
 
 TEST(reader, opens_a_file_by_its_literal_path)

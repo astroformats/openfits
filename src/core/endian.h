@@ -15,6 +15,8 @@
 #include <stdlib.h>
 #endif
 
+#include "core/simd.h"
+
 // Byte order conversions. FITS data are big-endian (standard §5.2, §5.3): a little-endian host swaps the bytes of every
 // item it reads or writes, and a big-endian host copies them. Nothing here assumes the byte order of the host.
 
@@ -91,17 +93,28 @@ template <std::unsigned_integral T> void store_big_endian(std::span<std::byte, s
     std::memcpy(bytes.data(), &value, sizeof(T));
 }
 
+/// Writes the items of item_size bytes, 2, 4 or 8, of from into to, which has its size, with their bytes reversed and
+/// then the bits of mask flipped, as unsigned integers of that size in the byte order of the host: to[i] =
+/// byte_swap(from[i]) ^ mask, the sign bit of a value converted between big-endian and native order given in mask
+/// for the offset of standard §5.2.5. from and to are the same memory or do not overlap. The bytes after the last
+/// complete item are copied as they are, and so is everything for items of other sizes. The kernels: SSE2 for items of
+/// 2 and 4 bytes, where it is faster than the scalar code, and AVX2 for items of 2, 4 and 8 bytes.
+void swap_items(std::span<const std::byte> from, std::span<std::byte> to, std::size_t item_size, std::uint64_t mask = 0,
+                simd_kernel kernel = simd_kernel::best) noexcept;
+
 /// Reverses the byte order of every item of item_size bytes, 2, 4 or 8, in place. Bytes after the last complete item
 /// are left unchanged; items of other sizes are left unchanged.
-void swap_byte_order(std::span<std::byte> data, std::size_t item_size) noexcept;
+void swap_byte_order(std::span<std::byte> data, std::size_t item_size, simd_kernel kernel = simd_kernel::best) noexcept;
 
 /// Converts items of item_size bytes, 2, 4 or 8, between big-endian and native byte order, in place: swaps them on a
 /// little-endian host and leaves them on a big-endian one. The conversion is its own inverse.
-void convert_big_endian(std::span<std::byte> data, std::size_t item_size) noexcept;
+void convert_big_endian(std::span<std::byte> data, std::size_t item_size,
+                        simd_kernel kernel = simd_kernel::best) noexcept;
 
 /// Copies items of item_size bytes from one byte order to the other, between big-endian and native: from and to have
 /// the same size and do not overlap. Items of 2, 4 and 8 bytes are converted as convert_big_endian() converts them, and
 /// everything else is copied as it is. The writer converts the caller's data this way, without modifying them.
-void copy_big_endian(std::span<const std::byte> from, std::span<std::byte> to, std::size_t item_size) noexcept;
+void copy_big_endian(std::span<const std::byte> from, std::span<std::byte> to, std::size_t item_size,
+                     simd_kernel kernel = simd_kernel::best) noexcept;
 
 } // namespace openfits::detail

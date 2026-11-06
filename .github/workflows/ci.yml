@@ -164,6 +164,12 @@ jobs:
             cxx: g++-14
             args: -DOPENFITS_WITH_TBB=ON
             packages: libtbb-dev
+          # Without the SIMD kernels, so that their scalar code is the only one on x64 too.
+          - name: gcc-14 x64 release without SIMD
+            runner: ubuntu-24.04
+            preset: linux-gcc-release
+            cxx: g++-14
+            args: -DOPENFITS_ENABLE_SIMD=OFF
           - name: gcc arm64 release
             runner: ubuntu-24.04-arm
             preset: linux-gcc-release

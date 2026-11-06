@@ -5,13 +5,16 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <optional>
+#include <string>
 
 namespace {
 
 using openfits::detail::is_reserved_keyword;
 using openfits::detail::is_structural_keyword;
 using openfits::detail::keyword_index;
+using openfits::detail::keyword_prefix;
 using openfits::detail::reserved_value_class;
 using openfits::detail::value_class;
 
@@ -87,6 +90,22 @@ TEST(keywords, gives_the_type_of_the_values_of_reserved_keywords)
     for (const char* name : {"BITPIX", "BSCALE", "EXTEND", "TTYPE1", "TUNIT1", "ZCMPTYPE", "EXPTIME", "DATE-MAP"}) {
         EXPECT_EQ(reserved_value_class(name), std::nullopt) << name;
     }
+}
+
+} // namespace
+
+namespace {
+
+// The prefix holds the first eight bytes of a keyword, completed with zeros: keywords that share them have the same
+// prefix, as HIERARCH names do, and so have those that differ in zero bytes at their end, which their sizes tell apart.
+TEST(keywords, gives_the_first_eight_bytes_of_a_keyword_as_its_prefix)
+{
+    EXPECT_EQ(keyword_prefix(""), 0U);
+    EXPECT_EQ(keyword_prefix("A"), std::uint64_t{'A'} << 56U);
+    EXPECT_EQ(keyword_prefix("ABCDEFGH"), keyword_prefix("ABCDEFGHIJ"));
+    EXPECT_EQ(keyword_prefix("A"), keyword_prefix(std::string("A") + '\0'));
+    EXPECT_NE(keyword_prefix("AB"), keyword_prefix("AC"));
+    EXPECT_NE(keyword_prefix("ESO DET "), keyword_prefix("ESO DET"));
 }
 
 } // namespace

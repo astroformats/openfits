@@ -24,7 +24,7 @@ namespace {
 constexpr std::uint64_t block_size = 2880;
 constexpr std::uint32_t negative_zero = 0xFFFFFFFFU;
 // The bytes that a verification reads from a source at once.
-constexpr std::size_t transfer = std::size_t{4} << 20;
+constexpr std::size_t transfer = staging_size;
 
 // A sum in 64 bits folded into 32, the carries added back: nonzero stays nonzero.
 constexpr std::uint32_t fold(std::uint64_t total) noexcept
@@ -33,6 +33,45 @@ constexpr std::uint32_t fold(std::uint64_t total) noexcept
     total = (total & 0xFFFFFFFFU) + (total >> 32U);
     return static_cast<std::uint32_t>(total);
 }
+
+#if defined(OPENFITS_SIMD_SSE2)
+
+// The pairs of integers of registers of 32 bytes from data, added as sum_of() adds them: each 32-bit integer of a
+// register reversed into the order of the host by one shuffle, then the even integers of its 64-bit lanes, through a
+// mask, and the odd ones, through a shift, added into those lanes. Each lane takes two integers of each register, less
+// than 2^33, so that the lanes of 2^28 registers, the pairs of a round, never overflow, nor does their total.
+OPENFITS_TARGET_AVX2 std::uint64_t sum_avx2(const std::byte* data, std::size_t registers) noexcept
+{
+    const __m256i reversal = _mm256_setr_epi8(3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12, 3, 2, 1, 0, 7, 6, 5,
+                                              4, 11, 10, 9, 8, 15, 14, 13, 12);
+    const __m256i low = _mm256_set1_epi64x(0xFFFFFFFF);
+    const auto* in = reinterpret_cast<const __m256i*>(data);
+    // Two sums, so that the additions of one register do not wait for those of the one before.
+    __m256i first = _mm256_setzero_si256();
+    __m256i second = _mm256_setzero_si256();
+    std::size_t i = 0;
+    for (; i + 2 <= registers; i += 2) {
+        const __m256i a = _mm256_shuffle_epi8(_mm256_loadu_si256(in + i), reversal);
+        const __m256i b = _mm256_shuffle_epi8(_mm256_loadu_si256(in + i + 1), reversal);
+        first = _mm256_add_epi64(first, _mm256_add_epi64(_mm256_and_si256(a, low), _mm256_srli_epi64(a, 32)));
+        second = _mm256_add_epi64(second, _mm256_add_epi64(_mm256_and_si256(b, low), _mm256_srli_epi64(b, 32)));
+    }
+    if (i < registers) {
+        const __m256i a = _mm256_shuffle_epi8(_mm256_loadu_si256(in + i), reversal);
+        first = _mm256_add_epi64(first, _mm256_add_epi64(_mm256_and_si256(a, low), _mm256_srli_epi64(a, 32)));
+    }
+    // The four lanes added in registers before the upper halves are cleared: GCC 11 forwards a register stored to
+    // memory to the loads after _mm256_zeroupper(), and reads the upper half that it cleared.
+    const __m256i lanes = _mm256_add_epi64(first, second);
+    __m128i pair = _mm_add_epi64(_mm256_castsi256_si128(lanes), _mm256_extracti128_si256(lanes, 1));
+    pair = _mm_add_epi64(pair, _mm_unpackhi_epi64(pair, pair));
+    const auto total = static_cast<std::uint64_t>(_mm_cvtsi128_si64(pair));
+    // The code after it may use the registers of SSE, which pay a transition while the upper halves are in use.
+    _mm256_zeroupper();
+    return total;
+}
+
+#endif
 
 // The value of a sum of DATASUM: decimal digits, between spaces, maybe after zeros (standard §4.4.2.7).
 std::optional<std::uint32_t> sum_in(std::string_view text) noexcept
@@ -77,17 +116,30 @@ std::uint64_t data_records(std::uint64_t size) noexcept
     return (size + block_size - 1) / block_size * block_size;
 }
 
-std::uint32_t sum_of(std::span<const std::byte> bytes, std::size_t round) noexcept
+std::uint32_t sum_of(std::span<const std::byte> bytes, std::size_t round, simd_kernel kernel) noexcept
 {
     // Two integers at a time: a 64-bit load holds them, the first in its high half.
     std::uint32_t result = 0;
     const std::byte* data = bytes.data();
     std::size_t pairs = bytes.size() / 8;
     round = std::clamp<std::size_t>(round, 1, sum_round);
+#if defined(OPENFITS_SIMD_SSE2)
+    const bool wide = kernel == simd_kernel::best && processor_has_avx2();
+#else
+    (void)kernel;
+#endif
     while (pairs > 0) {
         const std::size_t count = std::min(pairs, round);
         std::uint64_t total = 0;
-        for (std::size_t i = 0; i < count; ++i) {
+        std::size_t first = 0;
+#if defined(OPENFITS_SIMD_SSE2)
+        if (wide) {
+            // Four pairs a register.
+            total = sum_avx2(data, count / 4);
+            first = count / 4 * 4;
+        }
+#endif
+        for (std::size_t i = first; i < count; ++i) {
             const auto value = load_big_endian<std::uint64_t>(std::span<const std::byte, 8>(data + (8 * i), 8));
             total += (value >> 32U) + (value & 0xFFFFFFFFU);
         }

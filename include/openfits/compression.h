@@ -86,7 +86,8 @@ struct compression_options
     /// Compress a 64-bit integer image with RICE_1, with 8 bytes per pixel (standard Table 37), which readers built on
     /// CFITSIO do not decompress; RICE_1 refuses such an image otherwise.
     bool rice_bytepix_8 = false;
-    /// The level of zlib for GZIP_1 and GZIP_2, from 1, the fastest, to 9, the smallest; empty for the default of zlib.
+    /// The level of zlib for GZIP_1 and GZIP_2, from 1, the fastest, to 9, the smallest; empty for 1, the level at
+    /// which fpack compresses tiles too.
     std::optional<int> gzip_level{};
     /// Store a tile of a floating-point image that cannot be quantized, such as one whose range is beyond 32-bit
     /// integers, losslessly with GZIP in the column GZIP_COMPRESSED_DATA (standard §10.1.3), as fpack does; false

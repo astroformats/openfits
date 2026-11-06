@@ -20,6 +20,7 @@
 #include <ostream>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 // The validation of the models of the writer: each rule refused with validation_error, naming the unit and the keyword,
@@ -285,6 +286,45 @@ std::vector<refused_model> refused_models()
     add("plio_of_values_beyond_24_bits",
         image_of<std::int32_t>(axes({2}), {1, 1 << 24}, compression_options{.type = compression::plio}),
         errc::invalid_compression, 1, "ZCMPTYPE");
+    // The values of a tile of 1000 are checked whole, from each stored type, with and without the offset of BZERO.
+    {
+        const auto one_beyond = []<typename T>(std::type_identity<T>, std::size_t position, T value) {
+            std::vector<T> values(1000, T{5});
+            values[position] = value;
+            return values;
+        };
+        const compression_options plio{.type = compression::plio};
+        add("plio_of_a_negative_16_bit_value_at_the_end_of_a_tile",
+            image_of<std::int16_t>(axes({1000}), one_beyond(std::type_identity<std::int16_t>{}, 999, std::int16_t{-1}),
+                                   plio),
+            errc::invalid_compression, 1, "ZCMPTYPE");
+        add("plio_of_a_32_bit_value_beyond_24_bits_after_512_values",
+            image_of<std::int32_t>(axes({1000}),
+                                   one_beyond(std::type_identity<std::int32_t>{}, 700, std::int32_t{1} << 24), plio),
+            errc::invalid_compression, 1, "ZCMPTYPE");
+        add("plio_of_a_32_bit_value_below_the_offset_of_bzero",
+            image_of<std::int32_t>(
+                [] {
+                    image_info info = axes({1000}, bitpix::int32);
+                    info.scaling.zero = 32768.0;
+                    return info;
+                }(),
+                one_beyond(std::type_identity<std::int32_t>{}, 512, std::int32_t{-1}), plio),
+            errc::invalid_compression, 1, "ZCMPTYPE");
+        add("plio_of_a_64_bit_value_beyond_32_bits",
+            image_of<std::int64_t>(axes({1000}),
+                                   one_beyond(std::type_identity<std::int64_t>{}, 511, std::int64_t{1} << 40), plio),
+            errc::invalid_compression, 1, "ZCMPTYPE");
+        add("plio_of_a_64_bit_value_below_the_offset_of_bzero",
+            image_of<std::int64_t>(
+                [] {
+                    image_info info = axes({1000}, bitpix::int64);
+                    info.scaling.zero = 32768.0;
+                    return info;
+                }(),
+                one_beyond(std::type_identity<std::int64_t>{}, 0, std::int64_t{-1}), plio),
+            errc::invalid_compression, 1, "ZCMPTYPE");
+    }
     add("hcompress_of_an_image_of_one_axis",
         image_of<std::int16_t>(axes({8}), std::vector<std::int16_t>(8, 1),
                                compression_options{.type = compression::hcompress}),

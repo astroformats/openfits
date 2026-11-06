@@ -9,6 +9,12 @@
 
 namespace openfits::detail {
 
+/// The size of the staging chunks that the reads and writes of the library allocate for a call, 448 KiB: below the
+/// blocks of 512 KiB or more that the heap of Windows takes from the system afresh at each allocation, whose page
+/// faults a chunk of megabytes pays at each call, which made the read of a region of a camera frame twice as slow, and
+/// the verification of an image of 1024 x 1024 pixels four times.
+inline constexpr std::size_t staging_size = std::size_t{448} << 10;
+
 /// Memory for bytes that are written completely before they are read, such as a staging chunk of a read or a write.
 /// Unlike a std::vector, it is not filled with zeros first, which for a chunk of megabytes costs about as much as the
 /// copy that follows.
