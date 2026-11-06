@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Ezequiel Ruiz
-"""Writes the samples of Siril into tests/data/siril: the pattern image saved by Siril as 32-bit floats (E3), a FITSEQ
-sequence of three frames of the pattern (E4), and a synthetic CFA frame with its Bayer keywords (E6). E3 has an sRGB
-profile assigned, which Siril writes as an ICCProfile unit after the image, and the ROWORDER of its input. astropy writes
-the inputs into a working directory, and siril-cli loads and saves them there with make_siril.ssf, so that the samples
-have the headers that Siril writes. Run it with a Python that has astropy:
+"""Writes the samples of Siril into tests/data/siril: the pattern image saved by Siril as 32-bit floats (E3), the same
+image saved compressed with RICE_1 (E5), a FITSEQ sequence of three frames of the pattern (E4), and a synthetic CFA frame
+with its Bayer keywords (E6). E3 and E5 have the ICC profile of tests/data/icc assigned, a profile of this project, which
+Siril writes as an ICCProfile unit after the image, and the ROWORDER of their input. astropy writes the inputs into a
+working directory, and siril-cli loads and saves them there with make_siril.ssf, so that the samples have the headers
+that Siril writes. Run it with a Python that has astropy:
 
     python -I tests/data/scripts/make_siril.py tests/data/siril <working directory>
 
@@ -52,14 +53,16 @@ def main():
     work.mkdir(parents=True)
     output.mkdir(parents=True, exist_ok=True)
     inputs(work)
+    shutil.copyfile(Path(__file__).parents[1] / 'icc' / 'openfits-gray.icc', work / 'openfits-gray.icc')
     script = Path(__file__).with_name('make_siril.ssf')
     result = subprocess.run([str(SIRIL), '-d', str(work), '-s', str(script)], capture_output=True, text=True,
                             check=False)
     (work / 'siril.log').write_text(result.stdout + result.stderr)
     if result.returncode != 0:
         sys.exit(f'siril-cli failed ({result.returncode}), see {work / "siril.log"}')
-    for produced, sample in (('e3-siril-f32.fits', 'e3-siril-f32.fits'), ('e6-siril-cfa.fits', 'e6-siril-cfa.fits'),
-                             ('frames/frame.fits', 'e4-siril-fitseq.fits')):
+    for produced, sample in (('e3-siril-f32.fits', 'e3-siril-f32.fits'),
+                             ('e5-siril-rice.fits.fz', 'e5-siril-rice.fits.fz'),
+                             ('e6-siril-cfa.fits', 'e6-siril-cfa.fits'), ('frames/frame.fits', 'e4-siril-fitseq.fits')):
         shutil.copyfile(work / produced, output / sample)
     print('siril', result.stdout.splitlines()[0] if result.stdout else '')
 

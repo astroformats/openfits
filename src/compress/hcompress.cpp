@@ -1211,4 +1211,9 @@ void hcompress_decode(std::span<const std::byte> input, std::size_t nx, std::siz
     decode_tile(input, nx, ny, smooth, output);
 }
 
+std::int64_t hcompress_scale(std::span<const std::byte> input) noexcept
+{
+    return input.size() < header_size ? 0 : signed_32(get_big_endian(input, 10, 4));
+}
+
 } // namespace openfits::detail

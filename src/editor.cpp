@@ -250,8 +250,17 @@ struct editor::state
     {
         if (damaged) {
             throw usage_error(errc::not_editable,
-                              "a commit that moved units in place failed, and left the file damaged: open it again");
+                              "a commit failed once it had begun to move the units of the file, which it may have left "
+                              "damaged: open the file again");
         }
+    }
+
+    // Forgets the pending changes, once a commit has applied them and the file has been read again.
+    void drop_changes() noexcept
+    {
+        edits.clear();
+        insertions.clear();
+        blocks.clear();
     }
 
     // The header of a unit as the editor presents it: that of the image or the table that a compressed unit holds.
@@ -715,16 +724,16 @@ void editor::state::fold_writes()
         const bool sums = options.update_checksums &&
                           (detail::datasum_of(unit.header()).value || detail::has_checksum(unit.header()));
         const detail::data_reader read = data_reader_of(unit);
-        // Each write laid over whole, or not at all when its reads fail, so that the next commit lays it again.
-        std::size_t folded = 0;
-        try {
-            for (; folded < edit.patches.size(); ++folded) {
-                detail::apply_patch(edit.patches[folded], edit.overlay, read, sums ? &edit.change : nullptr);
-            }
-        } catch (...) {
-            edit.patches.erase(edit.patches.begin(), edit.patches.begin() + static_cast<std::ptrdiff_t>(folded));
-            throw;
+        // The writes laid over a copy of the overlay and of the sums, which replace them once every write is laid: a
+        // read that fails, or memory that runs out, partway through a write leaves them as they were, so that the next
+        // commit lays every write again over the bytes that they change, and sums those as the file holds them.
+        detail::byte_overlay overlay = edit.overlay;
+        detail::sum_change change = edit.change;
+        for (const detail::data_patch& patch : edit.patches) {
+            detail::apply_patch(patch, overlay, read, sums ? &change : nullptr);
         }
+        edit.overlay = std::move(overlay);
+        edit.change = change;
         edit.patches.clear();
         // The writes into a compressed image lie over values that only a decoding gives: each element written alone.
         for (const detail::data_patch& patch : edit.tile_patches) {
@@ -1274,10 +1283,10 @@ void editor::state::commit(const commit_options& requested)
         file_sink sink(path, {.flush_to_disk = write.flush_to_disk});
         detail::write_layout(sink, units, *device, advance);
         sink.finish();
-        edits.clear();
-        insertions.clear();
-        blocks.clear();
+        // The new file read before the changes are dropped: when it cannot be, they stay pending, and the next commit
+        // makes the same file again from the old one, which the device still reads, since the rename left it as it was.
         reopen(std::make_unique<detail::thread_safe_device>(std::make_unique<file_device>(path)));
+        drop_changes();
         return;
     }
     if (copy) {
@@ -1316,6 +1325,8 @@ void editor::state::commit(const commit_options& requested)
         if (write.flush_to_disk) {
             device->flush();
         }
+        // The units of the old file no longer describe the device: damaged until the new file is read.
+        reopen(nullptr);
         damaged = false;
     } else {
         progress.add_to_total(work);
@@ -1326,14 +1337,17 @@ void editor::state::commit(const commit_options& requested)
             damaged = moved;
             throw;
         }
+        // Units moved within the file leave the editor damaged until it has read the file again, as a failure while
+        // they move does. Writes in place alone leave the units where they were, and the next commit writes the same
+        // bytes again, which completes what a commit that fails from here left undone.
+        damaged = moved;
         if (write.flush_to_disk) {
             device->flush();
         }
+        reopen(nullptr);
+        damaged = false;
     }
-    edits.clear();
-    insertions.clear();
-    blocks.clear();
-    reopen(nullptr);
+    drop_changes();
 }
 
 void update_keywords(std::string_view path, std::size_t hdu, std::span<const card> cards, const editor_options& options)

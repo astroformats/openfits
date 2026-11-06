@@ -173,6 +173,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         return 0;
     } catch (const openfits::limit_error&) {
         return 0;
+    } catch (const openfits::integrity_error&) {
+        // Bytes that start as a gzip member does and do not inflate, which the reader takes for a gzip file.
+        return 0;
     }
     std::uint64_t end = 0;
     for (const hdu_info& unit : input->hdus()) {

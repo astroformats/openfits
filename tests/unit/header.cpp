@@ -86,6 +86,22 @@ TEST(header, finds_the_first_card_of_a_keyword_in_any_case_and_with_the_hierarch
     EXPECT_EQ(cards.value<double>("EXPTIME"), 1.0);
 }
 
+// Every card is found by its own keyword: a record whose hierarchical name starts with HIERARCH again, which a fuzzed
+// file held, and a card that the application names so, both under the name without the prefixes.
+TEST(header, finds_every_card_by_its_keyword_whose_hierarchical_name_starts_with_hierarch)
+{
+    header cards = parsed({"HIERARCH         HIERARCH ESO DET NDIT= 11"});
+    cards.set("HIERARCH HIERARCH ESO INS MODE", "fast");
+    ASSERT_EQ(cards.size(), 2U);
+    EXPECT_EQ(cards[0].keyword(), "ESO DET NDIT");
+    EXPECT_EQ(cards[1].keyword(), "ESO INS MODE");
+    for (std::size_t i = 0; i < cards.size(); ++i) {
+        EXPECT_EQ(cards.index_of(cards[i].keyword()), i);
+    }
+    EXPECT_EQ(cards.value<int>("HIERARCH ESO DET NDIT"), 11);
+    EXPECT_EQ(cards.value<std::string>("ESO INS MODE"), "fast");
+}
+
 // More cards than a lookup searches in order: the index sorts the keywords by their first eight bytes, and then whole
 // for those that share them, as HIERARCH names do, and keeps the first card of each.
 TEST(header, an_index_finds_the_first_card_of_keywords_that_share_their_first_eight_bytes)

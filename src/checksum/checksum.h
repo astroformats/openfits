@@ -109,17 +109,19 @@ void add_source_bytes(checksum_accumulator& sum, const thread_safe_source& sourc
 /// What the DATASUM of a header records (standard §4.4.2.7).
 struct recorded_datasum
 {
-    /// False without DATASUM, or with a value that is blank, null or undefined, which asserts nothing of the sum.
+    /// False without DATASUM, or with a value that is blank or undefined, which asserts nothing of the sum.
     bool known = false;
     /// The sum that it records: its string of decimal digits, between spaces and after zeros, or the integer of a
-    /// DATASUM written without quotes; nothing for any other value, which no data match.
+    /// DATASUM written without quotes; nothing for any other value, which no data match, a value field of none of the
+    /// forms of the standard included.
     std::optional<std::uint32_t> value{};
 };
 
 /// The DATASUM of a header, the first card of the keyword.
 [[nodiscard]] recorded_datasum datasum_of(const header& cards);
 
-/// True when the header has a CHECKSUM whose value is not blank, null or undefined.
+/// True when the header has a CHECKSUM whose value is not blank or undefined, a value field of none of the forms of the
+/// standard included, which the sum of its unit checks all the same.
 [[nodiscard]] bool has_checksum(const header& cards);
 
 /// The departures of the DATASUM and CHECKSUM of the header of the unit hdu, which starts at header_offset, as

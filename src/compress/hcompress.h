@@ -56,4 +56,8 @@ void hcompress_decode(std::span<const std::byte> input, std::size_t nx, std::siz
 void hcompress_decode(std::span<const std::byte> input, std::size_t nx, std::size_t ny, bool smooth,
                       std::span<std::int64_t> output);
 
+/// The scale that the header of the H-compress stream input gives, 0 and 1 for a lossless tile; 0 for input shorter
+/// than a header, which hcompress_decode() refuses.
+[[nodiscard]] std::int64_t hcompress_scale(std::span<const std::byte> input) noexcept;
+
 } // namespace openfits::detail

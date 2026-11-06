@@ -269,10 +269,29 @@ void read_window::grow(std::size_t size, std::size_t kept)
 }
 
 unit_header read_header(const thread_safe_source& source, std::uint64_t offset, std::uint64_t hdu,
-                        std::string_view first_keyword, const limits& limits, diagnostic_log& log, read_window& window)
+                        std::string_view first_keyword, const limits& limits, diagnostic_log& log, read_window& window,
+                        std::uint64_t headers_left)
 {
     const std::uint64_t available = source.size() - offset;
-    const std::uint64_t cap = limits.max_header_bytes == 0 ? available : std::min(available, limits.max_header_bytes);
+    const std::uint64_t own =
+        limits.max_header_bytes == 0 ? std::numeric_limits<std::uint64_t>::max() : limits.max_header_bytes;
+    // The most bytes that the header may have: those of its own limit, or what the limit of the headers of the file
+    // leaves of them.
+    const std::uint64_t allowed = std::min(own, headers_left);
+    const std::uint64_t cap = std::min(available, allowed);
+    const auto refuse = [&limits, &log, own, headers_left](const error_context& where) {
+        if (headers_left < own) {
+            log.error(errc::header_too_large, "",
+                      "the headers of the file are longer than the limit of " +
+                          std::to_string(limits.max_total_header_bytes) + " bytes",
+                      where);
+        } else {
+            log.error(errc::header_too_large, "",
+                      "the header is longer than the limit of " + std::to_string(limits.max_header_bytes) + " bytes",
+                      where);
+        }
+        return unit_header{.outcome = header_outcome::too_large};
+    };
     header_bytes bytes(source, offset, window);
     const std::span<const std::byte> start =
         bytes.fetch(std::min(std::max<std::uint64_t>(cap, record_length), first_header_read));
@@ -304,10 +323,7 @@ unit_header read_header(const thread_safe_source& source, std::uint64_t offset, 
             break;
         }
         if (data.size() >= cap) {
-            log.error(errc::header_too_large, "",
-                      "the header is longer than the limit of " + std::to_string(limits.max_header_bytes) + " bytes",
-                      {.hdu = hdu, .offset = offset});
-            return {.outcome = header_outcome::too_large};
+            return refuse({.hdu = hdu, .offset = offset});
         }
         data.read(source, offset + data.size(), std::min({piece_size, cap - data.size(), available - data.size()}));
     }
@@ -320,11 +336,8 @@ unit_header read_header(const thread_safe_source& source, std::uint64_t offset, 
         const std::uint64_t header_end = scanned + record_length;
         const std::uint64_t block_end = (header_end + block_size - 1) / block_size * block_size;
         result.size = std::min(block_end, available);
-        if (limits.max_header_bytes != 0 && result.size > limits.max_header_bytes) {
-            log.error(errc::header_too_large, "",
-                      "the header is longer than the limit of " + std::to_string(limits.max_header_bytes) + " bytes",
-                      where);
-            return {.outcome = header_outcome::too_large};
+        if (result.size > allowed) {
+            return refuse(where);
         }
         // The bytes read hold the block of END: pieces end with a block but where the source ends, which result.size
         // does then too, or where the limit cuts one, whose block of END the limit refuses above.

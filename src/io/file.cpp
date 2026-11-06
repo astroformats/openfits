@@ -120,7 +120,10 @@ std::string file_device::description() const
 
 struct file_sink::state
 {
-    state(std::string target_path, std::string temporary_path, detail::native_file temporary_file,
+    // The arguments by reference, moved into the members once the state is allocated: an argument by value may be made
+    // before the allocation, as GCC 11 makes it, and the new file is then closed without being discarded when the
+    // allocation fails, which leaves it behind.
+    state(std::string&& target_path, std::string&& temporary_path, detail::native_file&& temporary_file,
           const file_sink_options& options)
         : target(std::move(target_path)), temporary(std::move(temporary_path)), file(std::move(temporary_file)),
           flush_to_disk(options.flush_to_disk), replace(options.replace)
@@ -175,8 +178,8 @@ file_sink::file_sink(std::string_view path, file_sink_options options)
         std::string temporary = detail::temporary_path(target, detail::next_random(random));
         std::optional<detail::native_file> file = detail::native_file::create_new(temporary, target);
         if (file) {
-            // The file exists from here, and must not stay behind when the state cannot be allocated. Nothing is moved
-            // before the allocation succeeds.
+            // The file exists from here, and must not stay behind when the state cannot be allocated: the state takes
+            // its arguments by reference, so that nothing is moved before the allocation succeeds.
             try {
                 state_ = std::make_unique<state>(std::move(target), std::move(temporary), std::move(*file), options);
             } catch (...) {

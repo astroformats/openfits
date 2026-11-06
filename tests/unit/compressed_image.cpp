@@ -61,15 +61,16 @@ reader open(const std::vector<std::byte>& file)
     return reader(std::make_unique<openfits::memory_source>(std::vector<std::byte>(file)));
 }
 
-// The file of a PLIO_1 image of values with the scaling of info, its ZBITPIX given the value field, right-justified in
-// its 20 columns: the lists then hold values that the stored type of the new ZBITPIX may not. Not recorded for
-// other readers, some of which subtract no offset of BZERO from the values of PLIO_1 lists.
+// The file of an image of values with the scaling of info, compressed with type, PLIO_1 unless given, its ZBITPIX given
+// the value field, right-justified in its 20 columns: the tiles then hold values that the stored type of the new
+// ZBITPIX may not. Not recorded for other readers, some of which subtract no offset of BZERO from the values of PLIO_1
+// lists.
 template <typename T>
-std::vector<std::byte> plio_file_with_zbitpix(image_info info, const std::vector<T>& values, std::string_view field)
+std::vector<std::byte> file_with_zbitpix(image_info info, const std::vector<T>& values, std::string_view field,
+                                         compression type = compression::plio)
 {
     writer output;
-    output.add_image(std::move(info), std::span(values),
-                     {.compression = compression_options{.type = compression::plio}});
+    output.add_image(std::move(info), std::span(values), {.compression = compression_options{.type = type}});
     openfits::memory_sink sink;
     output.save(sink);
     std::vector<std::byte> file = sink.release();
@@ -96,7 +97,7 @@ TEST(compressed_image, refuses_a_plio_tile_whose_values_lie_beyond_its_bitpix)
 {
     image_info info;
     info.geometry.axes = {8, 8};
-    const reader input = open(plio_file_with_zbitpix(info, std::vector<std::int16_t>(64, 1000), "8"));
+    const reader input = open(file_with_zbitpix(info, std::vector<std::int16_t>(64, 1000), "8"));
     EXPECT_TRUE(throws<openfits::integrity_error>(errc::corrupt_compressed_data,
                                                   [&] { (void)input.read_pixels<std::uint8_t>(1); }));
 }
@@ -107,17 +108,97 @@ TEST(compressed_image, refuses_a_plio_value_beyond_its_bitpix_anywhere_in_its_ti
 {
     image_info info;
     info.geometry.axes = {1000};
-    const reader valid = open(plio_file_with_zbitpix(info, std::vector<std::int16_t>(1000, 7), "8"));
+    const reader valid = open(file_with_zbitpix(info, std::vector<std::int16_t>(1000, 7), "8"));
     EXPECT_EQ(valid.read_pixels<std::uint8_t>(1), std::vector<std::uint8_t>(1000, 7));
     for (const std::size_t position :
          {std::size_t{0}, std::size_t{511}, std::size_t{512}, std::size_t{700}, std::size_t{999}}) {
         std::vector<std::int16_t> values(1000, 7);
         values[position] = 1000;
-        const reader input = open(plio_file_with_zbitpix(info, values, "8"));
+        const reader input = open(file_with_zbitpix(info, values, "8"));
         EXPECT_TRUE(throws<openfits::integrity_error>(errc::corrupt_compressed_data,
                                                       [&] { (void)input.read_pixels<std::uint8_t>(1); }))
             << "the value at " << position;
     }
+}
+
+// A quantized image gives ZSCALE and ZZERO, as columns or as keywords (standard §10.2): one without the other leaves
+// its tiles without a scaling to restore their values, a compressed image refused, where a default would read garbage
+// (found by the differential run: a ZSCALE column renamed, whose ZZERO alone restored a tile as infinities).
+TEST(compressed_image, refuses_a_quantized_image_with_zscale_or_zzero_alone)
+{
+    std::vector<float> values(width * height);
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        values[i] = 100.0F + static_cast<float>(i % 13);
+    }
+    image_info info;
+    info.geometry.axes = {width, height};
+    writer output;
+    output.add_image(std::move(info), std::span<const float>(values),
+                     {.compression = compression_options{.type = compression::rice, .quantize_level = -0.5}});
+    openfits::memory_sink sink;
+    output.save(sink);
+    const std::vector<std::byte> file = sink.release();
+    EXPECT_EQ(open(file).read_pixels<float>(1).size(), values.size());
+    for (const std::string_view column : {std::string_view("'ZSCALE  '"), std::string_view("'ZZERO   '")}) {
+        std::vector<std::byte> renamed(file.begin(), file.end());
+        const std::span<const std::byte> pattern = std::as_bytes(std::span(column));
+        // The algorithms of iterators: Clang 15 cannot instantiate the ranges of these spans with libstdc++ 11 and 12.
+        // NOLINTNEXTLINE(modernize-use-ranges)
+        const auto at = std::search(renamed.begin(), renamed.end(), pattern.begin(), pattern.end());
+        ASSERT_NE(at, renamed.end()) << column;
+        *(at + 2) = std::byte{'Q'};
+        const reader input = open(renamed);
+        EXPECT_TRUE(throws<openfits::invalid_data_error>(errc::invalid_compression, [&] {
+            (void)input.read_pixels<float>(1);
+        })) << column;
+    }
+}
+
+// A lossless HCOMPRESS_1 tile restores the values that it compressed, which lie within the stored type: a value beyond
+// it is corrupt, as in a tile of any other algorithm, where a lossy tile is taken within the type. The file is an image
+// of 16-bit values of 1000, its ZBITPIX made 8 (found by the differential run, a fuzzed ZBITPIX that the tile ignored).
+TEST(compressed_image, refuses_a_lossless_hcompress_tile_whose_values_lie_beyond_its_bitpix)
+{
+    image_info info;
+    info.geometry.axes = {width, height};
+    const reader valid =
+        open(file_with_zbitpix(info, std::vector<std::int16_t>(width * height, 7), "8", compression::hcompress));
+    EXPECT_EQ(valid.read_pixels<std::uint8_t>(1), std::vector<std::uint8_t>(width * height, 7));
+    const reader input =
+        open(file_with_zbitpix(info, std::vector<std::int16_t>(width * height, 1000), "8", compression::hcompress));
+    EXPECT_TRUE(throws<openfits::integrity_error>(errc::corrupt_compressed_data,
+                                                  [&] { (void)input.read_pixels<std::uint8_t>(1); }));
+}
+
+// The codes of a quantized tile are 32-bit integers: a lossless HCOMPRESS_1 stream that decodes beyond them is corrupt
+// too. The stream of a valid tile is given the sum of a much larger tile in its header (bytes 14 to 21), from which the
+// decoder restores values beyond 2^31 (the differential run: a fuzzed stream read as codes of 2^31 - 1 everywhere).
+TEST(compressed_image, refuses_a_lossless_quantized_hcompress_tile_whose_codes_lie_beyond_32_bits)
+{
+    std::vector<float> values(width * height);
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        values[i] = 50.0F + static_cast<float>(i % 7);
+    }
+    image_info info;
+    info.geometry.axes = {width, height};
+    writer output;
+    output.add_image(std::move(info), std::span<const float>(values),
+                     {.compression = compression_options{.type = compression::hcompress, .quantize_level = -0.5}});
+    openfits::memory_sink sink;
+    output.save(sink);
+    std::vector<std::byte> file = sink.release();
+    EXPECT_EQ(open(file).read_pixels<float>(1).size(), values.size());
+    const std::array<std::byte, 2> magic{std::byte{0xDD}, std::byte{0x99}};
+    // The algorithms of iterators: Clang 15 cannot instantiate the ranges of these spans with libstdc++ 11 and 12.
+    // NOLINTNEXTLINE(modernize-use-ranges)
+    const auto stream = std::search(file.begin(), file.end(), magic.begin(), magic.end());
+    ASSERT_NE(stream, file.end());
+    const std::array<std::byte, 8> sum{std::byte{0}, std::byte{0}, std::byte{0x40}, std::byte{0},
+                                       std::byte{0}, std::byte{0}, std::byte{0},    std::byte{0}};
+    std::ranges::copy(sum, stream + 14);
+    const reader input = open(file);
+    EXPECT_TRUE(
+        throws<openfits::integrity_error>(errc::corrupt_compressed_data, [&] { (void)input.read_pixels<float>(1); }));
 }
 
 // The lists of an image of 16-bit integers whose BZERO is 32768 hold the stored values plus 32768, from 0 to 65535:
@@ -132,14 +213,14 @@ TEST(compressed_image, checks_the_plio_values_of_16_bit_integers_with_the_offset
     std::vector<std::int32_t> values(1000, 100);
     values[0] = 0;
     values[999] = 65535;
-    const reader valid = open(plio_file_with_zbitpix(info, values, "16"));
+    const reader valid = open(file_with_zbitpix(info, values, "16"));
     const std::vector<std::uint16_t> read = valid.read_pixels<std::uint16_t>(1);
     ASSERT_EQ(read.size(), 1000U);
     EXPECT_EQ(read[0], 0);
     EXPECT_EQ(read[500], 100);
     EXPECT_EQ(read[999], 65535);
     values[700] = 70000;
-    const reader beyond = open(plio_file_with_zbitpix(info, values, "16"));
+    const reader beyond = open(file_with_zbitpix(info, values, "16"));
     EXPECT_TRUE(throws<openfits::integrity_error>(errc::corrupt_compressed_data,
                                                   [&] { (void)beyond.read_pixels<std::uint16_t>(1); }));
 }

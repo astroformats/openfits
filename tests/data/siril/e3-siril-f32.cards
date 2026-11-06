@@ -10,13 +10,13 @@
 0	BSCALE	float	1.0	Default scaling factor
 0	MIPS-FLO	float	0.0	Lower visualization cutoff
 0	PROGRAM	str	Siril 1.4.4	Software that created this HDU
-0	DATE	str	2026-10-31T08:14:30	UTC date that FITS file was created
+0	DATE	str	2026-11-06T07:39:47	UTC date that FITS file was created
 0	ROWORDER	str	TOP-DOWN	Order of the rows in image array
-0	HISTORY	commentary	Assigned ICC profile: Gray-elle-V4-srgbtrc.icc	
+0	HISTORY	commentary	Assigned ICC profile: OpenFITS test gray, gamma 2.2	
 1	XTENSION	str	IMAGE	IMAGE extension
 1	BITPIX	int	8	number of bits per data pixel
 1	NAXIS	int	1	number of data axes
-1	NAXIS1	int	624	length of data axis 1
+1	NAXIS1	int	380	length of data axis 1
 1	PCOUNT	int	0	required keyword; must = 0
 1	GCOUNT	int	1	required keyword; must = 1
 1	EXTNAME	str	ICCProfile	

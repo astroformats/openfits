@@ -215,6 +215,8 @@ std::optional<native_file> native_file::create_new(const std::string& path, std:
 
 std::optional<native_file> native_file::create_scratch(const std::string& path)
 {
+    // The name allocated before the file exists, so that no allocation that fails leaves the file behind.
+    std::string name = path;
     // Readable and writable by the owner alone, and removed from its directory at once: the open handle keeps the
     // file until it is closed, by the process or at its end.
     const int handle = ::open(path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
@@ -225,7 +227,7 @@ std::optional<native_file> native_file::create_scratch(const std::string& path)
         }
         fail(errc::open_failed, "cannot create the temporary file " + path, error);
     }
-    native_file file(handle, path);
+    native_file file(handle, std::move(name));
     if (::unlink(path.c_str()) != 0) {
         const std::error_code error = last_error();
         fail(errc::open_failed, "cannot remove the temporary file " + path + " from its directory", error);

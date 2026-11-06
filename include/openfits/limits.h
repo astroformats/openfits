@@ -18,15 +18,19 @@ namespace openfits {
 /// limits before anything of that size is allocated or read. The defaults accept every file a real application is
 /// expected to write, the largest in use among them: a frame of the Euclid VIS camera, with 433 units; an image
 /// sequence of Siril, with one unit per frame; a mosaic of 168,000 x 168,000 pixels, 225 GB as floating-point values.
-/// Lower them for services that open files from unknown parties.
+/// The headers that a reader keeps take up to about four times their bytes in memory, so that with the defaults the
+/// headers of a hostile file can take about 4 GB. Lower them for services that open files from unknown parties.
 struct limits
 {
-    /// Number of header and data units that a reader walks: a unit beyond it is unavailable.
+    /// Number of header and data units that a reader walks: a unit beyond it is unavailable. A unit keeps about 1.5 KB
+    /// of memory besides the cards of its header.
     std::uint64_t max_hdus = 100'000;
-    /// Size of one header, in bytes, the block of its END card included. A header of a million cards takes 80 MB of
-    /// text, and about 200 MB once parsed.
+    /// Size of one header, in bytes, the block of its END card included. Its cards take up to about four times its
+    /// bytes in memory: a header of a million cards takes 80 MB of text, and about 290 MB once parsed. A longer header
+    /// is refused before any of its cards is parsed.
     std::uint64_t max_header_bytes = std::uint64_t{128} << 20;
-    /// Size of the headers of every unit that a reader has walked, which it keeps, in bytes.
+    /// Size of the headers of every unit that a reader has walked, which it keeps, in bytes, as max_header_bytes counts
+    /// them. A header beyond what it leaves is refused before any of its cards is parsed.
     std::uint64_t max_total_header_bytes = std::uint64_t{1} << 30;
     /// Size of a single allocation, in bytes.
     std::uint64_t max_allocation = std::uint64_t{16} << 30;
@@ -46,9 +50,9 @@ struct limits
     /// Size of the content of a gzip-compressed file once inflated into memory, in bytes: a larger one is refused,
     /// unless a temporary directory takes it (inflate_options).
     std::uint64_t max_inflated_bytes = std::uint64_t{16} << 30;
-    /// Number of diagnostics that a reader lists. When a file has more, the last one listed stands for itself and those
-    /// after it: it says how many they are, and has the severity of the most serious of them, with the code of the
-    /// first of those.
+    /// Number of diagnostics that a reader lists, each of about 200 bytes. When a file has more, the last one listed
+    /// stands for itself and those after it: it says how many they are, and has the severity of the most serious of
+    /// them, with the code of the first of those.
     std::uint64_t max_diagnostics = 10'000;
 };
 
